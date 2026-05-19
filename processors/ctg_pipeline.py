@@ -25,9 +25,10 @@ class CTGPipeline:
 
     @staticmethod
     def _clean_book_artifacts(text: str) -> str:
+        import re
+
         lines = text.split("\n")
         cleaned = []
-        skip_next = False
         in_front_matter = True
 
         for line in lines:
@@ -51,7 +52,17 @@ class CTGPipeline:
             cleaned.append(line)
 
         result = "\n".join(cleaned)
+
+        # Fix single-letter line breaks: "I\nN" → "In", "A\nnd" → "And"
+        result = re.sub(r'\b([A-Za-z])\n\s+([A-Za-z])\b', r'\1\2', result)
+
+        # Fix title case words split across lines: "The\nory" → "Theory"
+        result = re.sub(r'([a-z])\n([A-Z][a-z]{2,})', r'\1 \2', result)
+
+        # Collapse excessive whitespace
         result = re.sub(r"\n{4,}", "\n\n\n", result)
+        result = re.sub(r" {2,}", " ", result)
+
         return result.strip()
 
     def process(self, extracted: ExtractedContent, source_path: str = "") -> RAGDocument:
@@ -63,7 +74,18 @@ class CTGPipeline:
         if is_large:
             self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="metadata_only")
             sample = extracted.raw_text[:15000]
-            _, metadata = self._transformer.transform(sample, extracted.metadata)
+            _, llm_metadata = self._transformer.transform(sample, extracted.metadata)
+
+            metadata = extracted.metadata
+            if llm_metadata.topics:
+                metadata.topics = llm_metadata.topics
+            if llm_metadata.summary:
+                metadata.summary = llm_metadata.summary
+            if llm_metadata.key_insights:
+                metadata.key_insights = llm_metadata.key_insights
+            if llm_metadata.title and llm_metadata.title != extracted.metadata.title:
+                metadata.title = llm_metadata.title
+
             structured = self._clean_book_artifacts(extracted.raw_text)
         else:
             self._emit("compression_start", chars=len(extracted.raw_text))

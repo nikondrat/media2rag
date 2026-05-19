@@ -118,10 +118,28 @@ class PdfEpubExtractor(BaseExtractor):
             for h in heading_tags:
                 level = int(h.name[1])
                 prefix = "#" * min(level + 1, 6)
-                h.insert_before(f"\n{prefix} {h.get_text(strip=True)}\n")
+                h.insert_before(f"\n\n{prefix} {h.get_text(strip=True)}\n\n")
                 h.decompose()
 
-            text = soup.get_text(separator="\n", strip=True)
+            for br in soup.find_all("br"):
+                br.replace_with("\n")
+
+            for span in soup.find_all("span"):
+                t = span.get_text(strip=True)
+                if len(t) == 1 and t.isupper():
+                    next_sibling = span.next_sibling
+                    if next_sibling and isinstance(next_sibling, str) and next_sibling.strip():
+                        span.insert_after(next_sibling[0])
+                        next_sibling.replace_with(next_sibling[1:])
+
+            text = soup.get_text(separator=" ", strip=True)
+            text = re.sub(r" {2,}", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text)
+
+            # Fix drop caps: "I N THIS" → "IN THIS", "I N" → "IN"
+            text = re.sub(r'\b([A-Z])\s+([A-Z])\s+([A-Z]{2,})\b', r'\1\2 \3', text)
+            text = re.sub(r'\b([A-Z])\s+([A-Z]{2,})\b', r'\1\2', text)
+
             if text.strip() and len(text.strip()) > 200:
                 chapters.append(text)
 

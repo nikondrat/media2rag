@@ -17,6 +17,8 @@ struct DetailView: View {
                     contentSection
                 } else if item.state == .failed {
                     errorSection
+                } else if item.state == .queued {
+                    queuedSection
                 } else {
                     processingSection
                 }
@@ -192,6 +194,23 @@ struct DetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
+    }
+
+    private var queuedSection: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "circle.dashed")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.5))
+
+            Text("Файл в очереди")
+                .font(.title2)
+                .fontWeight(.medium)
+
+            Text("Нажмите «Запустить» для начала обработки")
+                .font(.body)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 300)
     }
 
     private var processingSection: some View {

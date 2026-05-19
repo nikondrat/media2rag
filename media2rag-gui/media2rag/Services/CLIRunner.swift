@@ -18,9 +18,19 @@ class CLIRunner: ObservableObject {
         let process = Process()
         let pipe = Pipe()
 
+        let env = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        var fullEnv = env
+        fullEnv["PATH"] = "\(home)/.cargo/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        fullEnv["HOME"] = home
+
+        process.environment = fullEnv
+
         if cliPath.hasSuffix(".py") {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["uv", "run", cliPath] + arguments
+            let projectDir = URL(fileURLWithPath: cliPath).deletingLastPathComponent().path
+            let scriptArgs = arguments.joined(separator: " ")
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-c", "cd \(projectDir) && uv run \(cliPath) \(scriptArgs)"]
         } else {
             process.executableURL = URL(fileURLWithPath: cliPath)
             process.arguments = arguments

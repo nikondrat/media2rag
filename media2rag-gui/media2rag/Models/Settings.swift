@@ -46,6 +46,7 @@ class SettingsManager: ObservableObject {
 
     var resolvedCLIPath: String {
         if !cliPath.isEmpty { return cliPath }
-        return Bundle.main.path(forResource: "cli", ofType: "py") ?? ""
+        let defaultPath = "/Users/a1/dev/tools/transcripts/cli.py"
+        return defaultPath
     }
 }
