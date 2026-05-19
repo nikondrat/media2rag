@@ -1,4 +1,5 @@
 import json
+import re
 
 from domain.document import ExtractedContent, RAGDocument
 from processors.compressor import Compressor
@@ -22,6 +23,37 @@ class CTGPipeline:
             obj = {"status": status, **kwargs}
             print(json.dumps(obj, ensure_ascii=False), flush=True)
 
+    @staticmethod
+    def _clean_book_artifacts(text: str) -> str:
+        lines = text.split("\n")
+        cleaned = []
+        skip_next = False
+        in_front_matter = True
+
+        for line in lines:
+            stripped = line.strip().lower()
+
+            if in_front_matter:
+                if any(kw in stripped for kw in ["part one", "chapter 1", "### part one", "### chapter"]):
+                    in_front_matter = False
+                if any(kw in stripped for kw in [
+                    "copyright", "all rights reserved", "library of congress",
+                    "isbn", "printed in", "typeset", "cataloging-in-publication",
+                    "dedication", "to nancy", "to my",
+                ]):
+                    continue
+                if stripped and not stripped.startswith("#") and len(stripped) < 80:
+                    if not any(c.isalpha() for c in stripped):
+                        continue
+                    if stripped.replace(".", "").replace("—", "").replace("-", "").strip() == "":
+                        continue
+
+            cleaned.append(line)
+
+        result = "\n".join(cleaned)
+        result = re.sub(r"\n{4,}", "\n\n\n", result)
+        return result.strip()
+
     def process(self, extracted: ExtractedContent, source_path: str = "") -> RAGDocument:
         if not extracted.raw_text.strip():
             raise ValueError("No content to process")
@@ -32,7 +64,7 @@ class CTGPipeline:
             self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="metadata_only")
             sample = extracted.raw_text[:15000]
             _, metadata = self._transformer.transform(sample, extracted.metadata)
-            structured = Compressor.clean_artifacts(extracted.raw_text)
+            structured = self._clean_book_artifacts(extracted.raw_text)
         else:
             self._emit("compression_start", chars=len(extracted.raw_text))
             compressed = self._compressor.compress(extracted.raw_text)

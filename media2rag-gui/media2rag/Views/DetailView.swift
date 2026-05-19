@@ -250,7 +250,7 @@ struct StateBadgeView: View {
 
     var label: String {
         switch state {
-        case .queued: return "В очереди"
+        case .queued: return "Ожидает"
         case .extracting: return "Извлечение"
         case .compressing: return "Сжатие"
         case .transforming: return "Трансформация"

@@ -235,13 +235,21 @@ struct QueueItemRow: View {
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
-                    Image(systemName: item.state.icon)
-                        .font(.system(size: 9))
-                        .foregroundColor(item.state.iconColor)
-
-                    Text(item.stateLabel)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    if item.state == .queued {
+                        Image(systemName: "circle")
+                            .font(.system(size: 6))
+                            .foregroundColor(.secondary.opacity(0.4))
+                        Text("Ожидает")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.4))
+                    } else {
+                        Image(systemName: item.state.icon)
+                            .font(.system(size: 9))
+                            .foregroundColor(item.state.iconColor)
+                        Text(item.stateLabel)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
 
                     if let elapsed = item.elapsedTime {
                         Text("• \(elapsed)")
@@ -270,7 +278,7 @@ struct QueueItemRow: View {
             } else if item.state != .queued {
                 ProgressView(value: item.progress)
                     .progressViewStyle(.linear)
-                    .frame(width: 40)
+                    .frame(width: 50)
             }
 
             Button(action: onDelete) {

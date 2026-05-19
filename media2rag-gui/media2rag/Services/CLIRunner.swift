@@ -18,8 +18,13 @@ class CLIRunner: ObservableObject {
         let process = Process()
         let pipe = Pipe()
 
-        process.executableURL = URL(fileURLWithPath: cliPath)
-        process.arguments = arguments
+        if cliPath.hasSuffix(".py") {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["uv", "run", cliPath] + arguments
+        } else {
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = arguments
+        }
 
         process.standardOutput = pipe
         process.standardError = pipe

@@ -74,6 +74,10 @@ struct SettingsView: View {
                         Text("Используется встроенный CLI из ресурсов приложения")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    } else if settingsManager.cliPath.hasSuffix(".py") {
+                        Text("Запускается через uv run")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     } else {
                         Text(settingsManager.cliPath)
                             .font(.caption)

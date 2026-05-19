@@ -70,6 +70,7 @@ class PdfEpubExtractor(BaseExtractor):
         import ebooklib
         from ebooklib import epub
         from bs4 import BeautifulSoup
+        import re
 
         book = epub.read_epub(source_path)
 
@@ -79,22 +80,49 @@ class PdfEpubExtractor(BaseExtractor):
         author = book.get_metadata("DC", "creator")
         author_name = author[0][0] if author else ""
 
-        description = book.get_metadata("DC", "description")
-        description_text = description[0][0] if description else ""
-
         chapters = []
-        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+
+        skip_title_patterns = [
+            "copyright", "acknowledgment", "acknowledgement", "dedication",
+            "about the author", "about this book",
+            "preface", "foreword", "introduction", "prologue", "epilogue",
+        ]
+
+        skip_content_patterns = [
+            "all rights reserved", "library of congress cataloging",
+            "printed in the united states", "typeset", "isbn",
+            "reproduction of this book", "permission to reproduce",
+        ]
+
+        for item in items:
             content = item.get_content().decode("utf-8")
             soup = BeautifulSoup(content, "html.parser")
 
-            for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
-                level = int(element.name[1])
+            full_text = soup.get_text(separator=" ", strip=True)
+            lower_text = full_text.lower()
+
+            title_el = soup.find(["h1", "h2", "title"])
+            if title_el:
+                title_text = title_el.get_text(strip=True).lower()
+                if any(p in title_text for p in skip_title_patterns):
+                    continue
+
+            if any(p in lower_text for p in skip_content_patterns):
+                continue
+
+            if lower_text.strip().startswith("contents") or lower_text.strip().startswith("table of contents"):
+                continue
+
+            heading_tags = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+            for h in heading_tags:
+                level = int(h.name[1])
                 prefix = "#" * min(level + 1, 6)
-                element.insert_before(f"\n{prefix} {element.get_text(strip=True)}\n")
-                element.decompose()
+                h.insert_before(f"\n{prefix} {h.get_text(strip=True)}\n")
+                h.decompose()
 
             text = soup.get_text(separator="\n", strip=True)
-            if text.strip():
+            if text.strip() and len(text.strip()) > 200:
                 chapters.append(text)
 
         raw_text = "\n\n".join(chapters)

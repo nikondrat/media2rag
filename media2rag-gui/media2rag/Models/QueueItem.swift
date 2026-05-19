@@ -12,7 +12,7 @@ enum ProcessingState: String, Codable {
 
     var icon: String {
         switch self {
-        case .queued: return "clock"
+        case .queued: return "circle"
         case .extracting: return "arrow.down.circle"
         case .compressing: return "rectangle.compress.vertical"
         case .transforming: return "text.justify"
@@ -24,7 +24,7 @@ enum ProcessingState: String, Codable {
 
     var iconColor: Color {
         switch self {
-        case .queued: return .secondary
+        case .queued: return .secondary.opacity(0.4)
         case .extracting, .compressing, .transforming, .generating: return .accentColor
         case .completed: return .green
         case .failed: return .red
