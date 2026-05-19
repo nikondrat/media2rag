@@ -17,25 +17,30 @@ class AudioExtractor(BaseExtractor):
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")
 
-        result = subprocess.run(
-            [
-                "whisper",
-                str(source_path),
-                "--model", self._cfg.model,
-                "--device", self._cfg.device,
-                "--output_format", "txt",
-                "--language", self._cfg.language or "",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=3600,
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"Whisper failed: {result.stderr[:500]}")
-
         txt_file = source_path.with_suffix(".txt")
-        raw_text = txt_file.read_text(encoding="utf-8") if txt_file.exists() else ""
+        try:
+            lang_args = ["--language", self._cfg.language] if self._cfg.language else []
+            result = subprocess.run(
+                [
+                    "whisper",
+                    str(source_path),
+                    "--model", self._cfg.model,
+                    "--device", self._cfg.device,
+                    "--output_format", "txt",
+                    "--output_dir", str(source_path.parent),
+                ] + lang_args,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(f"Whisper failed: {result.stderr[:500]}")
+
+            raw_text = txt_file.read_text(encoding="utf-8") if txt_file.exists() else ""
+        finally:
+            if txt_file.exists():
+                txt_file.unlink()
 
         duration = self._get_duration(source_path)
 

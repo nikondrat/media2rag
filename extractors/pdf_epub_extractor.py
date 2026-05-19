@@ -18,8 +18,11 @@ class PdfEpubExtractor(BaseExtractor):
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")
 
-        if source_path.suffix.lower() == ".pdf":
+        suffix = source_path.suffix.lower()
+        if suffix == ".pdf":
             return self._extract_pdf(source_path)
+        if suffix == ".epub":
+            return self._extract_epub(source_path)
 
         return self._extract_fallback(source_path)
 
@@ -61,6 +64,34 @@ class PdfEpubExtractor(BaseExtractor):
                 word_count=len(raw_text.split()),
             ),
             page_count=page_count,
+        )
+
+    def _extract_epub(self, source_path: Path) -> ExtractedContent:
+        import ebooklib
+        from ebooklib import epub
+        from bs4 import BeautifulSoup
+
+        book = epub.read_epub(source_path)
+        chapters = []
+        title = book.get_metadata("DC", "title")
+        book_title = title[0][0] if title else source_path.stem
+
+        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+            content = item.get_content().decode("utf-8")
+            soup = BeautifulSoup(content, "html.parser")
+            text = soup.get_text(separator="\n", strip=True)
+            if text.strip():
+                chapters.append(text)
+
+        raw_text = "\n\n".join(chapters)
+        return ExtractedContent(
+            raw_text=raw_text,
+            metadata=DocumentMetadata(
+                title=book_title,
+                source=str(source_path),
+                doc_type="epub",
+                word_count=len(raw_text.split()),
+            ),
         )
 
     def _extract_fallback(self, source_path: Path) -> ExtractedContent:

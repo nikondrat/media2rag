@@ -1,3 +1,4 @@
+import json
 import re
 
 
@@ -13,8 +14,14 @@ class Compressor:
         "Keep the original language. Output ONLY the cleaned text."
     )
 
-    def __init__(self, llm_client):
+    def __init__(self, llm_client, json_mode: bool = False):
         self._client = llm_client
+        self._json_mode = json_mode
+
+    def _emit(self, status: str, **kwargs):
+        if self._json_mode:
+            obj = {"status": status, **kwargs}
+            print(json.dumps(obj, ensure_ascii=False), flush=True)
 
     def compress(self, raw_text: str, max_input_tokens: int = 8000) -> str:
         if len(raw_text) < 500:
@@ -22,21 +29,24 @@ class Compressor:
 
         chunks = self._split_into_chunks(raw_text, max_input_tokens)
         if len(chunks) == 1:
-            return self._client.chat(
+            self._emit("compressing_chunk", current=1, total=1)
+            result = self._client.chat(
                 prompt=f"Clean up this raw transcript:\n\n{chunks[0]}",
                 system=self.SYSTEM_PROMPT,
             )
+            self._emit("compressed_chunk", current=1, total=1)
+            return result
 
         compressed_chunks = []
         total = len(chunks)
         for i, chunk in enumerate(chunks, 1):
-            print(f"    Cleaning chunk {i}/{total}...")
+            self._emit("compressing_chunk", current=i, total=total)
             result = self._client.chat(
                 prompt=f"Clean up this raw transcript:\n\n{chunk}",
                 system=self.SYSTEM_PROMPT,
             )
             compressed_chunks.append(result)
-            print(f"    Chunk {i}/{total} done")
+            self._emit("compressed_chunk", current=i, total=total)
 
         return "\n\n".join(compressed_chunks)
 

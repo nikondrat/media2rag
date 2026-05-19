@@ -1,3 +1,4 @@
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -15,51 +16,44 @@ class VideoExtractor(BaseExtractor):
         self._cfg = cfg
 
     def extract(self, source: Path | str) -> ExtractedContent:
-        if isinstance(source, str) and self._is_url(source):
-            video_path = self._download_video(source)
-        else:
-            video_path = Path(source) if isinstance(source, str) else source
+        is_url = isinstance(source, str) and self._is_url(source)
+        tmpdir_ctx = tempfile.TemporaryDirectory() if is_url else None
 
-        if not video_path.exists():
-            raise FileNotFoundError(f"File not found: {video_path}")
-
-        audio_path = self._extract_audio(video_path)
         try:
-            result = subprocess.run(
-                [
-                    "whisper",
-                    str(audio_path),
-                    "--model", self._cfg.model,
-                    "--device", self._cfg.device,
-                    "--output_format", "txt",
-                    "--language", self._cfg.language or "",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=3600,
+            if is_url:
+                video_path, video_title = self._download_video(source, tmpdir_ctx.name)
+            else:
+                video_path = Path(source) if isinstance(source, str) else source
+                video_title = video_path.stem
+
+            if not video_path.exists():
+                raise FileNotFoundError(f"File not found: {video_path}")
+
+            audio_path = self._extract_audio(video_path)
+            try:
+                raw_text = self._transcribe(audio_path)
+            finally:
+                if audio_path.exists():
+                    audio_path.unlink()
+                txt_file = audio_path.with_suffix(".txt")
+                if txt_file.exists():
+                    txt_file.unlink()
+
+            duration = self._get_duration(video_path)
+
+            return ExtractedContent(
+                raw_text=raw_text,
+                metadata=DocumentMetadata(
+                    title=video_title,
+                    source=str(source),
+                    doc_type="video",
+                    word_count=len(raw_text.split()),
+                ),
+                duration_seconds=duration,
             )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Whisper failed: {result.stderr[:500]}")
-
-            txt_file = audio_path.with_suffix(".txt")
-            raw_text = txt_file.read_text(encoding="utf-8") if txt_file.exists() else ""
         finally:
-            if audio_path.exists():
-                audio_path.unlink()
-
-        duration = self._get_duration(video_path)
-
-        return ExtractedContent(
-            raw_text=raw_text,
-            metadata=DocumentMetadata(
-                title=video_path.stem,
-                source=str(source),
-                doc_type="video",
-                word_count=len(raw_text.split()),
-            ),
-            duration_seconds=duration,
-        )
+            if tmpdir_ctx:
+                tmpdir_ctx.cleanup()
 
     def supports(self, source: Path | str) -> bool:
         if isinstance(source, str) and self._is_url(source):
@@ -70,17 +64,31 @@ class VideoExtractor(BaseExtractor):
     def _is_url(self, source: str) -> bool:
         return source.startswith("http") and any(p in source for p in self.VIDEO_URL_PATTERNS)
 
-    def _download_video(self, url: str) -> Path:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                ["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
-                 "-o", f"{tmpdir}/video.%(ext)s", url],
-                capture_output=True, text=True, timeout=600, check=True,
-            )
+    def _download_video(self, url: str, tmpdir: str) -> tuple[Path, str]:
+        result = subprocess.run(
+            ["yt-dlp", "--dump-json", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best", url],
+            capture_output=True, text=True, timeout=600, check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"yt-dlp failed: {result.stderr[:500]}")
+
+        info = json.loads(result.stdout)
+        title = info.get("title", "unknown")
+        video_path = Path(tmpdir) / "video.mp4"
+
+        subprocess.run(
+            ["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+             "-o", str(video_path), url],
+            capture_output=True, text=True, timeout=600, check=True,
+        )
+
+        if not video_path.exists():
             files = list(Path(tmpdir).glob("video.*"))
             if not files:
                 raise RuntimeError("yt-dlp: no video downloaded")
-            return files[0]
+            video_path = files[0]
+
+        return video_path, title
 
     def _extract_audio(self, video_path: Path) -> Path:
         audio_path = video_path.with_suffix(".wav")
@@ -90,6 +98,28 @@ class VideoExtractor(BaseExtractor):
             capture_output=True, text=True, timeout=300, check=True,
         )
         return audio_path
+
+    def _transcribe(self, audio_path: Path) -> str:
+        lang_args = ["--language", self._cfg.language] if self._cfg.language else []
+        result = subprocess.run(
+            [
+                "whisper",
+                str(audio_path),
+                "--model", self._cfg.model,
+                "--device", self._cfg.device,
+                "--output_format", "txt",
+                "--output_dir", str(audio_path.parent),
+            ] + lang_args,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Whisper failed: {result.stderr[:500]}")
+
+        txt_file = audio_path.with_suffix(".txt")
+        return txt_file.read_text(encoding="utf-8") if txt_file.exists() else ""
 
     def _get_duration(self, path: Path) -> float:
         try:
