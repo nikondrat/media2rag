@@ -96,3 +96,30 @@ class PostFilter:
             return self._llm_score(cleaned)
 
         return PostQuality(0.7, "Heuristic pass", True)
+
+    def _llm_score(self, text: str) -> PostQuality:
+        """Use LLM to assess borderline posts."""
+        prompt = (
+            "Evaluate this Telegram post for informational value. "
+            "Score 0-1 based on: factual content, analysis, insights, actionable information. "
+            "Deduct points for: self-promotion, CTAs, ads, reposts without commentary, "
+            "emotional reactions without substance.\n\n"
+            "Respond in JSON: {\"score\": 0.0-1.0, \"reason\": \"brief explanation\", \"keep\": true/false}\n\n"
+            f"Post:\n{text}"
+        )
+
+        try:
+            response = self._llm.chat(prompt=prompt, system="You are a content quality evaluator.")
+            import json
+            match = re.search(r"\{.*\}", response, re.DOTALL)
+            if match:
+                result = json.loads(match.group())
+                return PostQuality(
+                    score=result.get("score", 0.5),
+                    reason=result.get("reason", "LLM assessment"),
+                    passed=result.get("keep", True),
+                )
+        except Exception:
+            pass
+
+        return PostQuality(0.5, "LLM fallback — borderline", True)
