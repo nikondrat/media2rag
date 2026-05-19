@@ -5,24 +5,21 @@ struct SettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
     @Environment(\.dismiss) var dismiss
     @State private var showDirectoryPicker = false
+    @State private var showCLIPicker = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Backend") {
-                    Picker("LLM Backend", selection: $settingsManager.backend) {
-                        Text("OpenRouter (cloud)").tag("openrouter")
-                        Text("Ollama (local)").tag("ollama")
+                Section("Бэкенд") {
+                    Picker("LLM бэкенд", selection: $settingsManager.backend) {
+                        Text("OpenRouter (облако)").tag("openrouter")
+                        Text("Ollama (локально)").tag("ollama")
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: settingsManager.backend) { _, newValue in
                         Task {
                             await modelManager.refreshModels(newValue)
-                            if newValue == "openrouter" && modelManager.openRouterModels.isEmpty {
-                                settingsManager.model = "qwen/qwen-plus"
-                            } else if newValue == "ollama" && modelManager.ollamaModels.isEmpty {
-                                settingsManager.model = "gemma4:26b"
-                            } else if newValue == "openrouter" && !modelManager.openRouterModels.isEmpty {
+                            if newValue == "openrouter" && !modelManager.openRouterModels.isEmpty {
                                 settingsManager.model = modelManager.openRouterModels.first?.id ?? "qwen/qwen-plus"
                             } else if newValue == "ollama" && !modelManager.ollamaModels.isEmpty {
                                 settingsManager.model = modelManager.ollamaModels.first ?? "gemma4:26b"
@@ -37,24 +34,24 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Processing") {
-                    Toggle("Extract only (skip LLM)", isOn: $settingsManager.extractOnly)
+                Section("Обработка") {
+                    Toggle("Только извлечение (без LLM)", isOn: $settingsManager.extractOnly)
 
-                    Picker("Whisper Model", selection: $settingsManager.whisperModel) {
-                        Text("tiny (fast)").tag("tiny")
+                    Picker("Модель Whisper", selection: $settingsManager.whisperModel) {
+                        Text("tiny (быстро)").tag("tiny")
                         Text("base").tag("base")
                         Text("small").tag("small")
                         Text("medium").tag("medium")
-                        Text("large-v3 (best)").tag("large-v3")
+                        Text("large-v3 (лучше)").tag("large-v3")
                     }
 
-                    TextField("Language (auto for detection)", text: $settingsManager.whisperLanguage)
+                    TextField("Язык (авто)", text: $settingsManager.whisperLanguage)
                         .textFieldStyle(.roundedBorder)
                 }
 
-                Section("Output") {
+                Section("Вывод") {
                     HStack {
-                        TextField("Output directory", text: $settingsManager.outputDirectory)
+                        TextField("Папка вывода", text: $settingsManager.outputDirectory)
                             .textFieldStyle(.roundedBorder)
 
                         Button(action: { showDirectoryPicker = true }) {
@@ -63,26 +60,37 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("CLI Path") {
-                    TextField("Leave empty for bundled CLI", text: $settingsManager.cliPath)
-                        .textFieldStyle(.roundedBorder)
+                Section("CLI путь") {
+                    HStack {
+                        TextField("Авто, если пусто", text: $settingsManager.cliPath)
+                            .textFieldStyle(.roundedBorder)
+
+                        Button(action: { showCLIPicker = true }) {
+                            Image(systemName: "doc")
+                        }
+                    }
 
                     if settingsManager.cliPath.isEmpty {
-                        Text("Using bundled CLI from app resources")
+                        Text("Используется встроенный CLI из ресурсов приложения")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    } else {
+                        Text(settingsManager.cliPath)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
                 }
 
-                Button("Reset to defaults") {
+                Button("Сбросить настройки") {
                     settingsManager.resetToDefaults()
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("Settings")
+            .navigationTitle("Настройки")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
+                    Button("Готово") {
                         dismiss()
                     }
                 }
@@ -95,8 +103,16 @@ struct SettingsView: View {
                     settingsManager.outputDirectory = url.path
                 }
             }
+            .fileImporter(
+                isPresented: $showCLIPicker,
+                allowedContentTypes: [.plainText, .unixExecutable, .application]
+            ) { result in
+                if case .success(let url) = result {
+                    settingsManager.cliPath = url.path
+                }
+            }
         }
-        .frame(width: 500, height: 600)
+        .frame(width: 520, height: 620)
     }
 }
 
@@ -107,7 +123,7 @@ struct OllamaModelPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Model")
+                Text("Модель")
                 Spacer()
                 if modelManager.isLoading {
                     ProgressView()
@@ -124,9 +140,9 @@ struct OllamaModelPicker: View {
                 }
             }
 
-            Picker("Model", selection: $settingsManager.model) {
+            Picker("Модель", selection: $settingsManager.model) {
                 if modelManager.ollamaModels.isEmpty {
-                    Text("No models found").tag("")
+                    Text("Нет моделей").tag("")
                 } else {
                     ForEach(modelManager.ollamaModels, id: \.self) { model in
                         Text(model).tag(model)
@@ -145,7 +161,7 @@ struct OpenRouterModelPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Model")
+                Text("Модель")
                 Spacer()
                 if modelManager.isLoading {
                     ProgressView()
@@ -162,9 +178,9 @@ struct OpenRouterModelPicker: View {
                 }
             }
 
-            Picker("Model", selection: $settingsManager.model) {
+            Picker("Модель", selection: $settingsManager.model) {
                 if modelManager.openRouterModels.isEmpty {
-                    Text("No models found").tag("")
+                    Text("Нет моделей").tag("")
                 } else {
                     ForEach(modelManager.openRouterModels) { model in
                         Text(model.displayName).tag(model.id)

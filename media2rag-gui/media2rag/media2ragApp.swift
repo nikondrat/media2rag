@@ -23,14 +23,14 @@ struct media2ragApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
-            CommandMenu("Processing") {
-                Button("Start Processing") {
+            CommandMenu("Обработка") {
+                Button("Запустить") {
                     Task { await queueManager.startProcessing() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(queueManager.isProcessing || queueManager.items.isEmpty)
 
-                Button("Stop Processing") {
+                Button("Остановить") {
                     queueManager.stopProcessing()
                 }
                 .keyboardShortcut(".", modifiers: .command)
@@ -38,10 +38,15 @@ struct media2ragApp: App {
 
                 Divider()
 
-                Button("Clear Completed") {
+                Button("Очистить выполненные") {
                     queueManager.clearCompleted()
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
+
+                Button("Очистить всё") {
+                    queueManager.clearAll()
+                }
+                .keyboardShortcut("k", modifiers: [.command, .option])
             }
         }
 

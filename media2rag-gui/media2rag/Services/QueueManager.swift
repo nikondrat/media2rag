@@ -42,6 +42,10 @@ class QueueManager: ObservableObject {
         items.removeAll { $0.state == .completed || $0.state == .failed }
     }
 
+    func clearAll() {
+        items.removeAll()
+    }
+
     func startProcessing() async {
         guard !isProcessing, !items.isEmpty else { return }
         guard let settings = settingsManager else { return }

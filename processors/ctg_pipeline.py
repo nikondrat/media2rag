@@ -5,6 +5,8 @@ from processors.compressor import Compressor
 from processors.transformer import Transformer
 from processors.generator import Generator
 
+LARGE_DOC_THRESHOLD = 50000  # chars
+
 
 class CTGPipeline:
     """Compression → Transformation → Generation pipeline."""
@@ -24,13 +26,22 @@ class CTGPipeline:
         if not extracted.raw_text.strip():
             raise ValueError("No content to process")
 
-        self._emit("compression_start", chars=len(extracted.raw_text))
-        compressed = self._compressor.compress(extracted.raw_text)
-        compressed = Compressor.clean_artifacts(compressed)
-        self._emit("compression_done", chars=len(compressed))
+        is_large = len(extracted.raw_text) > LARGE_DOC_THRESHOLD
 
-        self._emit("transformation_start")
-        structured, metadata = self._transformer.transform(compressed, extracted.metadata)
+        if is_large:
+            self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="metadata_only")
+            sample = extracted.raw_text[:15000]
+            _, metadata = self._transformer.transform(sample, extracted.metadata)
+            structured = Compressor.clean_artifacts(extracted.raw_text)
+        else:
+            self._emit("compression_start", chars=len(extracted.raw_text))
+            compressed = self._compressor.compress(extracted.raw_text)
+            compressed = Compressor.clean_artifacts(compressed)
+            self._emit("compression_done", chars=len(compressed))
+
+            self._emit("transformation_start")
+            structured, metadata = self._transformer.transform(compressed, extracted.metadata)
+
         metadata.source = extracted.metadata.source or metadata.source
         metadata.doc_type = extracted.metadata.doc_type or metadata.doc_type
         self._emit("transformation_done", topics=metadata.topics)

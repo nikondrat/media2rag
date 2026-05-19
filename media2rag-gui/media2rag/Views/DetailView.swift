@@ -1,9 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DetailView: View {
     let item: QueueItem
     @State private var markdownContent = ""
-    @State private var showInFinder = false
+    @State private var showSavePanel = false
 
     var body: some View {
         ScrollView {
@@ -25,6 +26,16 @@ struct DetailView: View {
         .frame(minWidth: 500)
         .onAppear {
             loadContent()
+        }
+        .fileExporter(
+            isPresented: $showSavePanel,
+            document: MarkdownDocument(content: markdownContent),
+            contentType: .plainText,
+            defaultFilename: item.fileName + ".md"
+        ) { result in
+            if case .success(let url) = result {
+                try? markdownContent.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
     }
 
@@ -48,11 +59,20 @@ struct DetailView: View {
 
                 Spacer()
 
-                if item.state == .completed {
-                    Button(action: { openInFinder() }) {
-                        Label("Finder", systemImage: "folder")
+                HStack(spacing: 8) {
+                    if item.state == .completed {
+                        Button(action: { openInFinder() }) {
+                            Label("Finder", systemImage: "folder")
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
+
+                    if item.state == .completed && !markdownContent.isEmpty {
+                        Button(action: { showSavePanel = true }) {
+                            Label("Сохранить как...", systemImage: "square.and.arrow.down")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
             }
 
@@ -60,7 +80,7 @@ struct DetailView: View {
                 BadgeView(text: item.sourceType.rawValue.uppercased(), color: .accentColor)
 
                 if let words = item.wordCount {
-                    BadgeView(text: "\(words) words", color: .secondary)
+                    BadgeView(text: "\(words) слов", color: .secondary)
                 }
 
                 if let elapsed = item.elapsedTime {
@@ -76,7 +96,7 @@ struct DetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             if let summary = item.summary {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Summary")
+                    Text("Сводка")
                         .font(.headline)
                     Text(summary)
                         .font(.body)
@@ -87,7 +107,7 @@ struct DetailView: View {
 
             if let topics = item.topics, !topics.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Topics")
+                    Text("Темы")
                         .font(.headline)
                     FlowLayout(items: topics) { topic in
                         Text(topic)
@@ -102,7 +122,7 @@ struct DetailView: View {
 
             if let insights = item.keyInsights, !insights.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Key Insights")
+                    Text("Ключевые идеи")
                         .font(.headline)
                     ForEach(insights.prefix(5), id: \.self) { insight in
                         HStack(alignment: .top, spacing: 8) {
@@ -124,7 +144,7 @@ struct DetailView: View {
 
     private var contentSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Content")
+            Text("Содержимое")
                 .font(.headline)
 
             if !markdownContent.isEmpty {
@@ -138,7 +158,7 @@ struct DetailView: View {
                     Image(systemName: "doc.text")
                         .font(.system(size: 36))
                         .foregroundColor(.secondary)
-                    Text("Output file ready")
+                    Text("Файл готов")
                         .font(.title3)
                     if let url = item.outputURL {
                         Text(url.lastPathComponent)
@@ -158,7 +178,7 @@ struct DetailView: View {
                 .font(.system(size: 48))
                 .foregroundColor(.red)
 
-            Text("Processing failed")
+            Text("Ошибка обработки")
                 .font(.title2)
                 .fontWeight(.semibold)
 
@@ -177,9 +197,9 @@ struct DetailView: View {
     private var processingSection: some View {
         VStack(spacing: 20) {
             ProgressView()
-                .scaleEffect(1.5)
+                .scaleEffect(1.2)
 
-            Text("Processing...")
+            Text("Обработка...")
                 .font(.title2)
                 .fontWeight(.medium)
 
@@ -199,7 +219,7 @@ struct DetailView: View {
         do {
             markdownContent = try String(contentsOf: url, encoding: .utf8)
         } catch {
-            markdownContent = "Failed to load: \(error.localizedDescription)"
+            markdownContent = "Не удалось загрузить: \(error.localizedDescription)"
         }
     }
 
@@ -228,11 +248,23 @@ struct BadgeView: View {
 struct StateBadgeView: View {
     let state: ProcessingState
 
+    var label: String {
+        switch state {
+        case .queued: return "В очереди"
+        case .extracting: return "Извлечение"
+        case .compressing: return "Сжатие"
+        case .transforming: return "Трансформация"
+        case .generating: return "Генерация"
+        case .completed: return "Готово"
+        case .failed: return "Ошибка"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: state.icon)
                 .font(.system(size: 10))
-            Text(state.rawValue)
+            Text(label)
                 .font(.caption2)
                 .fontWeight(.medium)
         }
@@ -253,5 +285,28 @@ struct FlowLayout<Data: Sequence, Content: View>: View where Data.Element: Hasha
                 content(item)
             }
         }
+    }
+}
+
+struct MarkdownDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+
+    var content: String
+
+    init(content: String) {
+        self.content = content
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let string = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        content = string
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let data = content.data(using: .utf8) ?? Data()
+        return FileWrapper(regularFileWithContents: data)
     }
 }

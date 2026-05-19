@@ -69,13 +69,13 @@ struct QueueItem: Identifiable, Equatable {
 
     var stateLabel: String {
         switch self.state {
-        case .queued: return "Queued"
-        case .extracting: return "Extracting"
-        case .compressing: return "Compressing"
-        case .transforming: return "Transforming"
-        case .generating: return "Generating"
-        case .completed: return "Done"
-        case .failed: return "Failed"
+        case .queued: return "В очереди"
+        case .extracting: return "Извлечение"
+        case .compressing: return "Сжатие"
+        case .transforming: return "Трансформация"
+        case .generating: return "Генерация"
+        case .completed: return "Готово"
+        case .failed: return "Ошибка"
         }
     }
 

@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var filterType: SourceTypeFilter = .all
+    @State private var urlInput = ""
+    @State private var showFilePicker = false
 
     var filteredItems: [QueueItem] {
         var items = queueManager.items
@@ -32,7 +34,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
+                .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 420)
         } detail: {
             if let item = selectedItem {
                 DetailView(item: item)
@@ -41,12 +43,13 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.prominentDetail)
+        .frame(minWidth: 900, minHeight: 600)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button(action: {
                     Task { await queueManager.startProcessing() }
                 }) {
-                    Label("Start", systemImage: "play.fill")
+                    Label("Запустить", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(queueManager.isProcessing || queueManager.queuedCount == 0)
@@ -54,7 +57,7 @@ struct ContentView: View {
                 Button(action: {
                     queueManager.stopProcessing()
                 }) {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label("Стоп", systemImage: "stop.fill")
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
@@ -63,11 +66,11 @@ struct ContentView: View {
                 Divider()
 
                 Button(action: {
-                    queueManager.clearCompleted()
+                    queueManager.clearAll()
                 }) {
-                    Image(systemName: "trash")
+                    Label("Очистить всё", systemImage: "trash")
                 }
-                .disabled(queueManager.completedCount == 0)
+                .disabled(queueManager.items.isEmpty)
 
                 Button(action: { showSettings = true }) {
                     Image(systemName: "gearshape")
@@ -79,6 +82,11 @@ struct ContentView: View {
                 .environmentObject(settingsManager)
                 .environmentObject(modelManager)
         }
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.item]) { result in
+            if case .success(let url) = result {
+                queueManager.addSource(url.path)
+            }
+        }
         .onAppear {
             queueManager.setSettingsManager(settingsManager)
         }
@@ -86,7 +94,7 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            DropZoneView()
+            DropZoneView(showFilePicker: $showFilePicker)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
 
@@ -95,17 +103,17 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
-                TextField("Search files...", text: $searchText)
+                TextField("Поиск...", text: $searchText)
                     .textFieldStyle(.plain)
 
-                Picker("Filter", selection: $filterType) {
+                Picker("Фильтр", selection: $filterType) {
                     ForEach(SourceTypeFilter.allCases, id: \.self) { filter in
                         Text(filter.label).tag(filter)
                     }
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                .frame(width: 80)
+                .frame(width: 90)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -117,7 +125,7 @@ struct ContentView: View {
                     Image(systemName: searchText.isEmpty ? "square.and.arrow.down" : "magnifyingglass")
                         .font(.system(size: 28))
                         .foregroundColor(.secondary)
-                    Text(searchText.isEmpty ? "No files yet" : "No matches")
+                    Text(searchText.isEmpty ? "Нет файлов" : "Ничего не найдено")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -127,9 +135,11 @@ struct ContentView: View {
                     get: { selectedItemId },
                     set: { selectedItemId = $0 }
                 )) { item in
-                    QueueItemRow(item: item, isSelected: item.id == selectedItemId)
-                        .tag(item.id)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                    QueueItemRow(item: item, isSelected: item.id == selectedItemId) {
+                        queueManager.removeItem(item)
+                    }
+                    .tag(item.id)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                 }
                 .listStyle(.sidebar)
             }
@@ -139,12 +149,22 @@ struct ContentView: View {
             StatusBarView()
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
+
+            Divider()
+
+            URLInputView(urlInput: $urlInput) { url in
+                queueManager.addSource(url)
+                urlInput = ""
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .frame(minWidth: 280)
+        .frame(minWidth: 300)
     }
 }
 
 struct DropZoneView: View {
+    @Binding var showFilePicker: Bool
     @EnvironmentObject var queueManager: QueueManager
     @State private var isHovering = false
 
@@ -154,13 +174,19 @@ struct DropZoneView: View {
                 .font(.system(size: 24))
                 .foregroundColor(isHovering ? .accentColor : .secondary)
 
-            Text("Drop files or paste URLs")
+            Text("Перетащите файлы сюда")
                 .font(.subheadline)
                 .fontWeight(.medium)
 
             Text("PDF, EPUB, MP4, MP3, MD, YouTube, Telegram")
                 .font(.caption2)
                 .foregroundColor(.secondary)
+
+            Button("Или выберите файлы") {
+                showFilePicker = true
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
@@ -172,6 +198,9 @@ struct DropZoneView: View {
                         .stroke(isHovering ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor), lineWidth: isHovering ? 2 : 1)
                 )
         )
+        .onTapGesture {
+            showFilePicker = true
+        }
         .onDrop(of: [.fileURL, .url], isTargeted: $isHovering) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -191,6 +220,7 @@ struct DropZoneView: View {
 struct QueueItemRow: View {
     let item: QueueItem
     let isSelected: Bool
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -203,7 +233,6 @@ struct QueueItemRow: View {
                 Text(item.fileName)
                     .font(.body)
                     .lineLimit(1)
-                    .foregroundStyle(isSelected ? .primary : .primary)
 
                 HStack(spacing: 6) {
                     Image(systemName: item.state.icon)
@@ -241,8 +270,16 @@ struct QueueItemRow: View {
             } else if item.state != .queued {
                 ProgressView(value: item.progress)
                     .progressViewStyle(.linear)
-                    .frame(width: 50)
+                    .frame(width: 40)
             }
+
+            Button(action: onDelete) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .opacity(isSelected ? 1 : 0.3)
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
@@ -253,6 +290,36 @@ struct QueueItemRow: View {
             return "\(count / 1000)K"
         }
         return "\(count)"
+    }
+}
+
+struct URLInputView: View {
+    @Binding var urlInput: String
+    let onAdd: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "link")
+                .foregroundColor(.secondary)
+            TextField("Вставьте ссылку (YouTube, статья, Telegram)...", text: $urlInput)
+                .textFieldStyle(.plain)
+                .onSubmit {
+                    submit()
+                }
+
+            Button("Добавить") {
+                submit()
+            }
+            .buttonStyle(.bordered)
+            .disabled(urlInput.isEmpty)
+        }
+    }
+
+    private func submit() {
+        let trimmed = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            onAdd(trimmed)
+        }
     }
 }
 
@@ -278,7 +345,7 @@ struct StatusBarView: View {
             if queueManager.isProcessing {
                 ProgressView()
                     .scaleEffect(0.7)
-                Text("Processing...")
+                Text("Обработка...")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -293,11 +360,11 @@ struct EmptyStateView: View {
                 .font(.system(size: 56))
                 .foregroundColor(.secondary.opacity(0.6))
 
-            Text("Select a file to preview")
+            Text("Выберите файл для просмотра")
                 .font(.title2)
                 .fontWeight(.medium)
 
-            Text("Processed files will appear here with full content preview")
+            Text("Обработанные файлы появятся здесь с предпросмотром содержимого")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -318,11 +385,11 @@ enum SourceTypeFilter: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .all: return "All"
+        case .all: return "Все"
         case .pdf: return "PDF"
         case .epub: return "EPUB"
-        case .video: return "Video"
-        case .audio: return "Audio"
+        case .video: return "Видео"
+        case .audio: return "Аудио"
         case .url: return "URL"
         case .telegram: return "Telegram"
         case .markdown: return "MD"
