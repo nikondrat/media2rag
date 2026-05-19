@@ -20,23 +20,28 @@ class SettingsManager: ObservableObject {
     @Published var cliPath: String {
         didSet { UserDefaults.standard.set(cliPath, forKey: "cliPath") }
     }
+    @Published var extractOnly: Bool {
+        didSet { UserDefaults.standard.set(extractOnly, forKey: "extractOnly") }
+    }
 
     init() {
-        self.backend = UserDefaults.standard.string(forKey: "backend") ?? "ollama"
-        self.model = UserDefaults.standard.string(forKey: "model") ?? "gemma4:26b"
+        self.backend = UserDefaults.standard.string(forKey: "backend") ?? "openrouter"
+        self.model = UserDefaults.standard.string(forKey: "model") ?? "qwen/qwen-plus"
         self.outputDirectory = UserDefaults.standard.string(forKey: "outputDirectory") ?? "\(NSHomeDirectory())/Documents/media2rag"
         self.whisperModel = UserDefaults.standard.string(forKey: "whisperModel") ?? "large-v3"
         self.whisperLanguage = UserDefaults.standard.string(forKey: "whisperLanguage") ?? "auto"
         self.cliPath = UserDefaults.standard.string(forKey: "cliPath") ?? ""
+        self.extractOnly = UserDefaults.standard.bool(forKey: "extractOnly")
     }
 
     func resetToDefaults() {
-        backend = "ollama"
-        model = "gemma4:26b"
+        backend = "openrouter"
+        model = "qwen/qwen-plus"
         outputDirectory = "\(NSHomeDirectory())/Documents/media2rag"
         whisperModel = "large-v3"
         whisperLanguage = "auto"
         cliPath = ""
+        extractOnly = false
     }
 
     var resolvedCLIPath: String {

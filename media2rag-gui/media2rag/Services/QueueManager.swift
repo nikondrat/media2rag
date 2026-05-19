@@ -11,6 +11,11 @@ class QueueManager: ObservableObject {
     private var cliRunner = CLIRunner()
     private var settingsManager: SettingsManager?
 
+    var totalCount: Int { items.count }
+    var queuedCount: Int { items.filter { $0.state == .queued }.count }
+    var completedCount: Int { items.filter { $0.state == .completed }.count }
+    var failedCount: Int { items.filter { $0.state == .failed }.count }
+
     func setSettingsManager(_ manager: SettingsManager) {
         self.settingsManager = manager
     }
@@ -78,11 +83,20 @@ class QueueManager: ObservableObject {
             return item
         }
 
+        var args = [
+            item.source,
+            "-o", settings.outputDirectory,
+            "--backend", settings.backend,
+            "--model", settings.model,
+            "--json"
+        ]
+
+        if settings.extractOnly {
+            args.append("--extract-only")
+        }
+
         let events = cliRunner.run(
-            source: item.source,
-            outputDir: settings.outputDirectory,
-            backend: settings.backend,
-            model: settings.model,
+            arguments: args,
             cliPath: cliPath
         )
 
@@ -119,6 +133,7 @@ class QueueManager: ObservableObject {
                 item.completedAt = Date()
                 if let output = event.output {
                     item.outputURL = URL(fileURLWithPath: output)
+                    loadMetadata(from: item.outputURL, item: &item)
                 }
                 totalProcessed += 1
             case "error":
@@ -132,5 +147,47 @@ class QueueManager: ObservableObject {
         }
 
         return item
+    }
+
+    private func loadMetadata(from url: URL?, item: inout QueueItem) {
+        guard let url = url else { return }
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            if let frontmatter = parseFrontmatter(content) {
+                item.topics = frontmatter.topics
+                item.summary = frontmatter.summary
+                item.keyInsights = frontmatter.keyInsights
+            }
+        } catch {
+            // Ignore metadata parsing errors
+        }
+    }
+
+    private func parseFrontmatter(_ content: String) -> (topics: [String]?, summary: String?, keyInsights: [String]?)? {
+        guard content.hasPrefix("---") else { return nil }
+
+        let parts = content.split(separator: "---", maxSplits: 2)
+        guard parts.count >= 2 else { return nil }
+
+        let yamlContent = String(parts[1])
+        var topics: [String]?
+        var summary: String?
+        var keyInsights: [String]?
+
+        for line in yamlContent.split(separator: "\n") {
+            if line.hasPrefix("topics:") {
+                topics = []
+            } else if line.hasPrefix("  - ") && topics != nil {
+                topics?.append(String(line.dropFirst(4)))
+            } else if line.hasPrefix("summary:") {
+                summary = String(line.dropFirst(9).trimmingCharacters(in: .whitespaces))
+            } else if line.hasPrefix("key_insights:") {
+                keyInsights = []
+            } else if line.hasPrefix("  - ") && keyInsights != nil {
+                keyInsights?.append(String(line.dropFirst(4)))
+            }
+        }
+
+        return (topics: topics, summary: summary, keyInsights: keyInsights)
     }
 }

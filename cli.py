@@ -18,20 +18,28 @@ from processors.ctg_pipeline import CTGPipeline
 
 
 def get_llm_client(cfg: AppConfig, model: str = ""):
-    if cfg.llm_backend == "openrouter" or cfg.openrouter.api_key:
+    if cfg.llm_backend == "openrouter" and cfg.openrouter.api_key:
         client = OpenRouterClient(cfg.openrouter)
         if client.is_available():
             if model:
                 client._model = model
             return client
-        print("⚠️  OpenRouter API key not set")
+        print("⚠️  OpenRouter API key not set or unavailable")
 
-    client = OllamaClient(cfg.ollama)
-    if client.is_available():
-        if model:
-            client._ctg_model = model
-        return client
-    print("⚠️  Ollama not available at", cfg.ollama.base_url)
+    if cfg.llm_backend == "ollama":
+        client = OllamaClient(cfg.ollama)
+        if client.is_available():
+            if model:
+                client._ctg_model = model
+            return client
+        print("⚠️  Ollama not available at", cfg.ollama.base_url)
+
+    if cfg.openrouter.api_key:
+        client = OpenRouterClient(cfg.openrouter)
+        if client.is_available():
+            if model:
+                client._model = model
+            return client
 
     print("   No LLM backend — saving raw extraction")
     return None

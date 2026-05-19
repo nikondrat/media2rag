@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum ProcessingState: String, Codable {
     case queued = "queued"
@@ -21,12 +22,12 @@ enum ProcessingState: String, Codable {
         }
     }
 
-    var color: String {
+    var iconColor: Color {
         switch self {
-        case .queued: return "secondary"
-        case .extracting, .compressing, .transforming, .generating: return "accent"
-        case .completed: return "green"
-        case .failed: return "red"
+        case .queued: return .secondary
+        case .extracting, .compressing, .transforming, .generating: return .accentColor
+        case .completed: return .green
+        case .failed: return .red
         }
     }
 }
@@ -41,6 +42,8 @@ struct QueueItem: Identifiable, Equatable {
     var errorMessage: String?
     var wordCount: Int?
     var topics: [String]?
+    var keyInsights: [String]?
+    var summary: String?
     var startedAt: Date?
     var completedAt: Date?
 
@@ -64,14 +67,26 @@ struct QueueItem: Identifiable, Equatable {
         }
     }
 
+    var stateLabel: String {
+        switch self.state {
+        case .queued: return "Queued"
+        case .extracting: return "Extracting"
+        case .compressing: return "Compressing"
+        case .transforming: return "Transforming"
+        case .generating: return "Generating"
+        case .completed: return "Done"
+        case .failed: return "Failed"
+        }
+    }
+
     var elapsedTime: String? {
         guard let started = startedAt else { return nil }
         let end = completedAt ?? Date()
         let interval = end.timeIntervalSince(started)
         if interval < 60 {
-            return "\(Int(interval))с"
+            return "\(Int(interval))s"
         }
-        return "\(Int(interval / 60))м \(Int(interval.truncatingRemainder(dividingBy: 60)))с"
+        return "\(Int(interval / 60))m \(Int(interval.truncatingRemainder(dividingBy: 60)))s"
     }
 }
 
@@ -82,6 +97,9 @@ enum SourceType: String, Codable {
         if source.hasPrefix("http") {
             if source.contains("t.me/") || source.contains("telegram.me/") {
                 return .telegram
+            }
+            if source.contains("youtube.com") || source.contains("youtu.be") || source.contains("vimeo.com") {
+                return .video
             }
             return .url
         }

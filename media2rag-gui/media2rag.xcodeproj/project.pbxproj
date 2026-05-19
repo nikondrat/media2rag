@@ -13,8 +13,9 @@
 		A10004 /* CLIRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20004; };
 		A10005 /* QueueManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20005; };
 		A10006 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20006; };
-		A10007 /* PreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20007; };
+		A10007 /* DetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20007; };
 		A10008 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20008; };
+		A10009 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20009; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,8 +25,9 @@
 		A20004 /* CLIRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIRunner.swift; sourceTree = "<group>"; };
 		A20005 /* QueueManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueManager.swift; sourceTree = "<group>"; };
 		A20006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		A20007 /* PreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewView.swift; sourceTree = "<group>"; };
+		A20007 /* DetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailView.swift; sourceTree = "<group>"; };
 		A20008 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A20009 /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
 		A30001 /* media2rag.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = media2rag.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -81,6 +83,7 @@
 			children = (
 				A20004 /* CLIRunner.swift */,
 				A20005 /* QueueManager.swift */,
+				A20009 /* ModelManager.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -89,7 +92,7 @@
 			isa = PBXGroup;
 			children = (
 				A20006 /* ContentView.swift */,
-				A20007 /* PreviewView.swift */,
+				A20007 /* DetailView.swift */,
 				A20008 /* SettingsView.swift */,
 			);
 			path = Views;
@@ -153,8 +156,9 @@
 				A10004 /* CLIRunner.swift in Sources */,
 				A10005 /* QueueManager.swift in Sources */,
 				A10006 /* ContentView.swift in Sources */,
-				A10007 /* PreviewView.swift in Sources */,
+				A10007 /* DetailView.swift in Sources */,
 				A10008 /* SettingsView.swift in Sources */,
+				A10009 /* ModelManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

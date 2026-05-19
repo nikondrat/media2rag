@@ -1,5 +1,8 @@
 import subprocess
+import tempfile
 from pathlib import Path
+
+import whisper
 
 from config import WhisperConfig
 from domain.document import ExtractedContent, DocumentMetadata
@@ -11,36 +14,22 @@ class AudioExtractor(BaseExtractor):
 
     def __init__(self, cfg: WhisperConfig):
         self._cfg = cfg
+        self._model = None
+
+    def _load_model(self):
+        if self._model is None:
+            self._model = whisper.load_model(self._cfg.model, device=self._cfg.device)
+        return self._model
 
     def extract(self, source: Path | str) -> ExtractedContent:
         source_path = Path(source) if isinstance(source, str) else source
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")
 
-        txt_file = source_path.with_suffix(".txt")
-        try:
-            lang_args = ["--language", self._cfg.language] if self._cfg.language else []
-            result = subprocess.run(
-                [
-                    "whisper",
-                    str(source_path),
-                    "--model", self._cfg.model,
-                    "--device", self._cfg.device,
-                    "--output_format", "txt",
-                    "--output_dir", str(source_path.parent),
-                ] + lang_args,
-                capture_output=True,
-                text=True,
-                timeout=3600,
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Whisper failed: {result.stderr[:500]}")
-
-            raw_text = txt_file.read_text(encoding="utf-8") if txt_file.exists() else ""
-        finally:
-            if txt_file.exists():
-                txt_file.unlink()
+        model = self._load_model()
+        lang = self._cfg.language or None
+        result = model.transcribe(str(source_path), language=lang)
+        raw_text = result.get("text", "").strip()
 
         duration = self._get_duration(source_path)
 

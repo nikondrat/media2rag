@@ -72,24 +72,40 @@ class PdfEpubExtractor(BaseExtractor):
         from bs4 import BeautifulSoup
 
         book = epub.read_epub(source_path)
-        chapters = []
+
         title = book.get_metadata("DC", "title")
         book_title = title[0][0] if title else source_path.stem
 
+        author = book.get_metadata("DC", "creator")
+        author_name = author[0][0] if author else ""
+
+        description = book.get_metadata("DC", "description")
+        description_text = description[0][0] if description else ""
+
+        chapters = []
         for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             content = item.get_content().decode("utf-8")
             soup = BeautifulSoup(content, "html.parser")
+
+            for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+                level = int(element.name[1])
+                prefix = "#" * min(level + 1, 6)
+                element.insert_before(f"\n{prefix} {element.get_text(strip=True)}\n")
+                element.decompose()
+
             text = soup.get_text(separator="\n", strip=True)
             if text.strip():
                 chapters.append(text)
 
         raw_text = "\n\n".join(chapters)
+
         return ExtractedContent(
             raw_text=raw_text,
             metadata=DocumentMetadata(
                 title=book_title,
                 source=str(source_path),
                 doc_type="epub",
+                author=author_name,
                 word_count=len(raw_text.split()),
             ),
         )

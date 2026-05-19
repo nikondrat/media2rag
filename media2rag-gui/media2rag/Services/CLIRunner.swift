@@ -7,10 +7,7 @@ class CLIRunner: ObservableObject {
 
     @MainActor
     func run(
-        source: String,
-        outputDir: String,
-        backend: String,
-        model: String,
+        arguments: [String],
         cliPath: String
     ) -> AsyncStream<CLIJSONEvent> {
         let stream = AsyncStream<CLIJSONEvent> { [weak self] continuation in
@@ -22,13 +19,7 @@ class CLIRunner: ObservableObject {
         let pipe = Pipe()
 
         process.executableURL = URL(fileURLWithPath: cliPath)
-        process.arguments = [
-            source,
-            "-o", outputDir,
-            "--backend", backend,
-            "--model", model,
-            "--json"
-        ]
+        process.arguments = arguments
 
         process.standardOutput = pipe
         process.standardError = pipe
