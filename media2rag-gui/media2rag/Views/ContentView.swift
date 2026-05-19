@@ -28,10 +28,13 @@ struct ContentView: View {
     }
 
     var selectedItem: QueueItem? {
+        if let selId = selectedItemId, queueManager.items.contains(where: { $0.id == selId }) {
+            return queueManager.items.first { $0.id == selId }
+        }
         if let activeId = queueManager.activeItemId {
             return queueManager.items.first { $0.id == activeId }
         }
-        return queueManager.items.first { $0.id == selectedItemId }
+        return nil
     }
 
     var body: some View {
