@@ -84,15 +84,16 @@ class QueueManager: ObservableObject {
     }
 
     private func processItem(index: Int, settings: SettingsManager) async {
-        var item = items[index]
-        item.state = .extracting
-        item.statusMessage = "Загрузка файла..."
-        item.startedAt = Date()
-        item.progress = 0
-        items[index] = item
+        guard index < items.count else { return }
+
+        items[index].state = .extracting
+        items[index].statusMessage = "Загрузка файла..."
+        items[index].startedAt = Date()
+        items[index].progress = 0
 
         let cliPath = settings.resolvedCLIPath
         if cliPath.isEmpty {
+            guard index < items.count else { return }
             items[index].state = .failed
             items[index].statusMessage = "Путь к CLI не указан"
             items[index].errorMessage = "Путь к CLI не указан"
@@ -102,7 +103,7 @@ class QueueManager: ObservableObject {
         }
 
         var args = [
-            item.source,
+            items[index].source,
             "-o", settings.outputDirectory,
             "--backend", settings.backend,
             "--model", settings.model,
@@ -118,17 +119,35 @@ class QueueManager: ObservableObject {
             cliPath: cliPath
         )
 
+        var isTelegramChannel = false
+
         for await event in events {
+            guard index < items.count else { break }
+
             switch event.eventType {
             case "telegram_channel":
+                isTelegramChannel = true
                 items[index].statusMessage = "Скрапинг канала: \(event.totalPosts ?? 0) постов найдено"
                 items[index].progress = 0.05
             case "telegram_progress":
                 if let current = event.current, let total = event.total {
-                    let pct = Double(current) / Double(total) * 0.3
+                    let pct = Double(current) / Double(total) * 0.85
                     items[index].progress = 0.05 + pct
                     items[index].statusMessage = "Пост \(current) из \(total)..."
                 }
+            case "telegram_complete":
+                items[index].state = .completed
+                items[index].statusMessage = "Готово: \(event.processed ?? 0) из \(event.total ?? 0) постов"
+                items[index].progress = 1.0
+                items[index].completedAt = Date()
+                items[index].outputFiles = event.outputFiles
+                if let files = event.outputFiles, let first = files.first {
+                    items[index].outputURL = URL(fileURLWithPath: first)
+                }
+                if let words = event.words {
+                    items[index].wordCount = words
+                }
+                totalProcessed += 1
             case "extracting":
                 items[index].state = .extracting
                 items[index].statusMessage = "Извлечение содержимого..."
@@ -168,14 +187,16 @@ class QueueManager: ObservableObject {
                 items[index].statusMessage = "Документ сгенерирован"
                 items[index].progress = 0.95
             case "completed":
-                items[index].state = .completed
-                items[index].statusMessage = "Готово"
-                items[index].progress = 1.0
-                items[index].completedAt = Date()
-                if let output = event.output {
-                    items[index].outputURL = URL(fileURLWithPath: output)
+                if !isTelegramChannel {
+                    items[index].state = .completed
+                    items[index].statusMessage = "Готово"
+                    items[index].progress = 1.0
+                    items[index].completedAt = Date()
+                    if let output = event.output {
+                        items[index].outputURL = URL(fileURLWithPath: output)
+                    }
+                    totalProcessed += 1
                 }
-                totalProcessed += 1
             case "error":
                 items[index].state = .failed
                 items[index].statusMessage = "Ошибка"
@@ -186,6 +207,8 @@ class QueueManager: ObservableObject {
                 break
             }
         }
+
+        guard index < items.count else { return }
 
         if items[index].state == .completed {
             loadMetadata(from: items[index].outputURL, index: index)

@@ -183,22 +183,26 @@ struct DetailView: View {
 
                 Spacer()
 
-                Picker("Режим", selection: $previewMode) {
-                    ForEach(PreviewMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
+                if !item.isTelegramChannel {
+                    Picker("Режим", selection: $previewMode) {
+                        ForEach(PreviewMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
 
-                Button(action: { loadContent(from: item.outputURL) }) {
-                    Image(systemName: "arrow.clockwise")
+                    Button(action: { loadContent(from: item.outputURL) }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Обновить")
                 }
-                .buttonStyle(.borderless)
-                .help("Обновить")
             }
 
-            if !markdownContent.isEmpty {
+            if item.isTelegramChannel {
+                channelFilesView(for: item)
+            } else if !markdownContent.isEmpty {
                 if previewMode == .formatted {
                     formattedPreview
                 } else {
@@ -225,6 +229,47 @@ struct DetailView: View {
                 .padding()
             }
         }
+    }
+
+    private func channelFilesView(for item: QueueItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(item.outputFiles?.count ?? 0) постов обработано")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.bottom, 4)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(item.outputFiles ?? [], id: \.self) { filePath in
+                        Button(action: { openFile(filePath) }) {
+                            HStack {
+                                Image(systemName: "doc.text")
+                                    .foregroundColor(.accentColor)
+                                Text((filePath as NSString).lastPathComponent)
+                                    .font(.body)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 10)
+                            .background(Color(nsColor: .controlBackgroundColor))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 400)
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(12)
+    }
+
+    private func openFile(_ path: String) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
     private var formattedPreview: some View {

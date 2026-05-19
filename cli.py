@@ -143,6 +143,9 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
         return None
 
     processed = 0
+    output_paths = []
+    total_words = 0
+
     for i, post in enumerate(posts):
         post_url = post.url
         if not json_mode:
@@ -171,17 +174,19 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
             doc = pipeline.process(extracted, post_url)
 
         output_path = doc.save(output_dir)
+        output_paths.append(str(output_path))
+        total_words += len(post.text.split())
         processed += 1
 
-        if json_mode:
-            emit_json("completed", file=post_url, output=str(output_path))
-        elif not json_mode:
+        if not json_mode:
             print(f"      ✅ {output_path.name}")
 
     if not json_mode:
         print(f"✅ Channel done: {processed}/{total} posts processed")
     else:
-        emit_json("telegram_complete", channel=channel, processed=processed, total=total)
+        emit_json("telegram_complete", channel=channel, processed=processed, total=total,
+                  output_files=output_paths, words=total_words)
+        emit_json("completed", file=url, output=output_paths[0] if output_paths else "", words=total_words)
     return output_dir
 
 

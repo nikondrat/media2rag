@@ -40,6 +40,7 @@ struct QueueItem: Identifiable, Equatable {
     var progress: Double = 0
     var statusMessage: String = ""
     var outputURL: URL?
+    var outputFiles: [String]?
     var errorMessage: String?
     var wordCount: Int?
     var topics: [String]?
@@ -47,6 +48,10 @@ struct QueueItem: Identifiable, Equatable {
     var summary: String?
     var startedAt: Date?
     var completedAt: Date?
+
+    var isTelegramChannel: Bool {
+        sourceType == .telegram && (outputFiles?.count ?? 0) > 1
+    }
 
     var fileName: String {
         if let url = URL(string: source) {
