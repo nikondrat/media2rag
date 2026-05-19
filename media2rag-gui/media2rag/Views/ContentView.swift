@@ -28,7 +28,10 @@ struct ContentView: View {
     }
 
     var selectedItem: QueueItem? {
-        queueManager.items.first { $0.id == selectedItemId }
+        if let activeId = queueManager.activeItemId {
+            return queueManager.items.first { $0.id == activeId }
+        }
+        return queueManager.items.first { $0.id == selectedItemId }
     }
 
     var body: some View {
@@ -242,17 +245,19 @@ struct QueueItemRow: View {
                         Text("Ожидает")
                             .font(.caption2)
                             .foregroundColor(.secondary.opacity(0.4))
+                    } else if !item.statusMessage.isEmpty && item.state != .completed && item.state != .failed {
+                        Image(systemName: item.state.icon)
+                            .font(.system(size: 9))
+                            .foregroundColor(item.state.iconColor)
+                        Text(item.statusMessage)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
                     } else {
                         Image(systemName: item.state.icon)
                             .font(.system(size: 9))
                             .foregroundColor(item.state.iconColor)
                         Text(item.stateLabel)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-
-                    if let elapsed = item.elapsedTime {
-                        Text("• \(elapsed)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }

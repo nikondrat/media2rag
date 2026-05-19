@@ -218,17 +218,26 @@ struct DetailView: View {
             ProgressView()
                 .scaleEffect(1.2)
 
-            Text("Обработка...")
-                .font(.title2)
-                .fontWeight(.medium)
+            VStack(spacing: 8) {
+                Text(item.stateLabel)
+                    .font(.title2)
+                    .fontWeight(.medium)
 
-            Text(item.stateLabel)
-                .font(.body)
-                .foregroundColor(.secondary)
+                Text(item.statusMessage)
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
             ProgressView(value: item.progress)
                 .progressViewStyle(.linear)
-                .frame(width: 200)
+                .frame(width: 250)
+
+            if let elapsed = item.elapsedTime {
+                Text("Время: \(elapsed)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 300)
     }

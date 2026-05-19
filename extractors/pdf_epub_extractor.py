@@ -69,7 +69,8 @@ class PdfEpubExtractor(BaseExtractor):
     def _extract_epub(self, source_path: Path) -> ExtractedContent:
         import ebooklib
         from ebooklib import epub
-        from bs4 import BeautifulSoup, NavigableString
+        from bs4 import BeautifulSoup, NavigableString, Tag
+        import hashlib
         import re
 
         book = epub.read_epub(source_path)
@@ -82,6 +83,21 @@ class PdfEpubExtractor(BaseExtractor):
 
         chapters = []
         items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+
+        # Extract images first
+        image_items = book.get_items_of_type(ebooklib.ITEM_IMAGE)
+        image_map = {}  # filename -> saved path
+        output_dir = source_path.parent / f"{source_path.stem}_images"
+        output_dir.mkdir(exist_ok=True)
+
+        for img_item in image_items:
+            img_data = img_item.get_content()
+            img_hash = hashlib.md5(img_data).hexdigest()[:8]
+            ext = Path(img_item.file_name).suffix or ".jpg"
+            filename = f"img_{img_hash}{ext}"
+            img_path = output_dir / filename
+            img_path.write_bytes(img_data)
+            image_map[img_item.file_name] = str(img_path.relative_to(source_path.parent))
 
         skip_title_patterns = [
             "copyright", "acknowledgment", "acknowledgement", "dedication",
@@ -124,6 +140,22 @@ class PdfEpubExtractor(BaseExtractor):
             for br in soup.find_all("br"):
                 br.replace_with("\n")
 
+            # Track image positions before unwrapping
+            img_positions = []
+            for img in soup.find_all("img"):
+                src = img.get("src", "")
+                if src in image_map:
+                    parent = img.parent
+                    parent_text = parent.get_text(" ", strip=True) if isinstance(parent, Tag) else ""
+                    img_positions.append({
+                        "src": src,
+                        "path": image_map[src],
+                        "context": "inline" if parent and parent.name == "p" else "block",
+                        "parent_text_preview": parent_text[:100] if parent_text else "",
+                    })
+                img.replace_with(f"\n![image]({image_map.get(src, src)})\n")
+
+            # Unwrap inline tags without creating line breaks
             for tag in soup.find_all(["em", "i", "strong", "b", "span", "a"]):
                 tag.unwrap()
 
@@ -146,22 +178,47 @@ class PdfEpubExtractor(BaseExtractor):
             extract_blocks(root)
 
             text = "\n\n".join(blocks)
+
+            # Fix punctuation spacing from tag unwrapping
+            text = re.sub(r" +([,.;:])", r"\1", text)
+            text = re.sub(r"([,.;:]) +", r"\1 ", text)
+
+            # ALL-CAPS header detection
+            lines = text.split("\n\n")
+            processed_lines = []
+            caps_pattern = re.compile(r'^[A-Z][A-Z\s\-\'"]{14,}$')
+            caps_start_pattern = re.compile(r'^([A-Z][A-Z\s\-\'"]{14,})\s+(.+)$')
+
+            for line in lines:
+                stripped = line.strip()
+                if caps_pattern.match(stripped):
+                    words = stripped.split()
+                    if len(words) >= 3:
+                        processed_lines.append(f"## {stripped}")
+                        continue
+                caps_match = caps_start_pattern.match(stripped)
+                if caps_match:
+                    header = caps_match.group(1)
+                    rest = caps_match.group(2)
+                    words = header.split()
+                    if len(words) >= 3:
+                        processed_lines.append(f"## {header}")
+                        processed_lines.append(rest)
+                        continue
+                processed_lines.append(line)
+
+            text = "\n\n".join(processed_lines)
             text = re.sub(r"\n{3,}", "\n\n", text)
             text = re.sub(r" {2,}", " ", text)
-            text = re.sub(r" ,", ",", text)
-            text = re.sub(r" \.", ".", text)
-            text = re.sub(r" ;", ";", text)
-            text = re.sub(r" :", ":", text)
-
-            text = re.sub(r'([a-z])\n\n([A-Z])\s+([A-Z])\s+([A-Z]{2,})', r'\1\n\n\2\3 \4', text)
-            text = re.sub(r'([a-z])\n\n([A-Z])\s+([A-Z]{2,})', r'\1\n\n\2\3', text)
-            text = re.sub(r'(?:^|\n\n)([A-Z])\s+([A-Z])\s+([A-Z]{2,})', r'\1\2 \3', text)
-            text = re.sub(r'(?:^|\n\n)([A-Z])\s+([A-Z]{2,})', r'\1\2', text)
 
             if text.strip() and len(text.strip()) > 200:
                 chapters.append(text)
 
         raw_text = "\n\n".join(chapters)
+
+        images = []
+        for img_info in image_map.values():
+            images.append({"path": img_info, "position": "embedded"})
 
         return ExtractedContent(
             raw_text=raw_text,
@@ -172,6 +229,7 @@ class PdfEpubExtractor(BaseExtractor):
                 author=author_name,
                 word_count=len(raw_text.split()),
             ),
+            images=images,
         )
 
     def _extract_fallback(self, source_path: Path) -> ExtractedContent:

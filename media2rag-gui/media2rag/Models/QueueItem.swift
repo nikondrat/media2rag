@@ -38,6 +38,7 @@ struct QueueItem: Identifiable, Equatable {
     let sourceType: SourceType
     var state: ProcessingState = .queued
     var progress: Double = 0
+    var statusMessage: String = ""
     var outputURL: URL?
     var errorMessage: String?
     var wordCount: Int?

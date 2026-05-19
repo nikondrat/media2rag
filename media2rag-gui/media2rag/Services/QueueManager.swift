@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 class QueueManager: ObservableObject {
     @Published var items: [QueueItem] = []
+    @Published var activeItemId: UUID?
     @Published var isProcessing = false
     @Published var currentIndex = 0
     @Published var totalProcessed = 0
@@ -15,6 +16,11 @@ class QueueManager: ObservableObject {
     var queuedCount: Int { items.filter { $0.state == .queued }.count }
     var completedCount: Int { items.filter { $0.state == .completed }.count }
     var failedCount: Int { items.filter { $0.state == .failed }.count }
+
+    var activeItem: QueueItem? {
+        guard let id = activeItemId else { return nil }
+        return items.first { $0.id == id }
+    }
 
     func setSettingsManager(_ manager: SettingsManager) {
         self.settingsManager = manager
@@ -55,36 +61,40 @@ class QueueManager: ObservableObject {
         totalProcessed = 0
         totalErrors = 0
 
-        var updatedItems = items
-        for index in updatedItems.indices {
-            guard updatedItems[index].state == .queued else { continue }
+        for index in items.indices {
+            guard items[index].state == .queued else { continue }
 
             currentIndex = index
-            let updatedItem = await processItem(updatedItems[index], settings: settings)
-            updatedItems[index] = updatedItem
-            items = updatedItems
+            activeItemId = items[index].id
+            await processItem(index: index, settings: settings)
         }
 
+        activeItemId = nil
         isProcessing = false
     }
 
     func stopProcessing() {
         cliRunner.stop()
+        activeItemId = nil
         isProcessing = false
     }
 
-    private func processItem(_ item: QueueItem, settings: SettingsManager) async -> QueueItem {
-        var item = item
+    private func processItem(index: Int, settings: SettingsManager) async {
+        var item = items[index]
         item.state = .extracting
+        item.statusMessage = "Загрузка файла..."
         item.startedAt = Date()
         item.progress = 0
+        items[index] = item
 
         let cliPath = settings.resolvedCLIPath
         if cliPath.isEmpty {
-            item.state = .failed
-            item.errorMessage = "CLI path not configured"
+            items[index].state = .failed
+            items[index].statusMessage = "Путь к CLI не указан"
+            items[index].errorMessage = "Путь к CLI не указан"
+            items[index].completedAt = Date()
             totalErrors += 1
-            return item
+            return
         }
 
         var args = [
@@ -107,60 +117,76 @@ class QueueManager: ObservableObject {
         for await event in events {
             switch event.eventType {
             case "extracting":
-                item.state = .extracting
-                item.progress = 0.1
+                items[index].state = .extracting
+                items[index].statusMessage = "Извлечение содержимого..."
+                items[index].progress = 0.1
             case "extracted":
-                item.wordCount = event.words
-                item.progress = 0.2
+                items[index].wordCount = event.words
+                items[index].statusMessage = "Содержимое извлечено (\(event.words ?? 0) слов)"
+                items[index].progress = 0.2
             case "compression_start":
-                item.state = .compressing
-                item.progress = 0.3
-            case "compressing_chunk", "compressed_chunk":
+                items[index].state = .compressing
+                items[index].statusMessage = "Очистка текста от шума..."
+                items[index].progress = 0.3
+            case "compressing_chunk":
                 if let current = event.current, let total = event.total {
                     let chunkProgress = Double(current) / Double(total) * 0.3
-                    item.progress = 0.3 + chunkProgress
+                    items[index].progress = 0.3 + chunkProgress
+                    items[index].statusMessage = "Очистка чанка \(current) из \(total)..."
+                }
+            case "compressed_chunk":
+                if let current = event.current, let total = event.total {
+                    items[index].statusMessage = "Чанк \(current) из \(total) готов ✓"
                 }
             case "compression_done":
-                item.progress = 0.6
+                items[index].statusMessage = "Текст очищен и сжат"
+                items[index].progress = 0.6
             case "transformation_start":
-                item.state = .transforming
+                items[index].state = .transforming
+                items[index].statusMessage = "Поиск тем и структуры..."
             case "transformation_done":
-                item.topics = event.topics
-                item.progress = 0.8
+                items[index].topics = event.topics
+                items[index].statusMessage = "Найдено тем: \(event.topics?.count ?? 0)"
+                items[index].progress = 0.8
             case "generation_start":
-                item.state = .generating
+                items[index].state = .generating
+                items[index].statusMessage = "Генерация RAG markdown..."
             case "generation_done":
-                item.progress = 0.95
+                items[index].statusMessage = "Документ сгенерирован"
+                items[index].progress = 0.95
             case "completed":
-                item.state = .completed
-                item.progress = 1.0
-                item.completedAt = Date()
+                items[index].state = .completed
+                items[index].statusMessage = "Готово"
+                items[index].progress = 1.0
+                items[index].completedAt = Date()
                 if let output = event.output {
-                    item.outputURL = URL(fileURLWithPath: output)
-                    loadMetadata(from: item.outputURL, item: &item)
+                    items[index].outputURL = URL(fileURLWithPath: output)
                 }
                 totalProcessed += 1
             case "error":
-                item.state = .failed
-                item.errorMessage = event.message ?? "Unknown error"
-                item.completedAt = Date()
+                items[index].state = .failed
+                items[index].statusMessage = "Ошибка"
+                items[index].errorMessage = event.message ?? "Неизвестная ошибка"
+                items[index].completedAt = Date()
                 totalErrors += 1
             default:
                 break
             }
         }
 
-        return item
+        if items[index].state == .completed {
+            loadMetadata(from: items[index].outputURL, index: index)
+        }
     }
 
-    private func loadMetadata(from url: URL?, item: inout QueueItem) {
+    private func loadMetadata(from url: URL?, index: Int) {
         guard let url = url else { return }
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
             if let frontmatter = parseFrontmatter(content) {
-                item.topics = frontmatter.topics
-                item.summary = frontmatter.summary
-                item.keyInsights = frontmatter.keyInsights
+                items[index].topics = frontmatter.topics
+                items[index].summary = frontmatter.summary
+                items[index].keyInsights = frontmatter.keyInsights
             }
         } catch {
             // Ignore metadata parsing errors
