@@ -3,6 +3,7 @@ import Foundation
 class CLIRunner: ObservableObject {
     private var process: Process?
     private var streamContinuation: AsyncStream<CLIJSONEvent>.Continuation?
+    private var timeoutTask: Task<Void, Never>?
 
     @MainActor
     func run(
@@ -19,6 +20,7 @@ class CLIRunner: ObservableObject {
         let errPipe = Pipe()
         let stderrLock = NSLock()
         var stderrData = Data()
+        var lastEventTime = Date()
 
         let env = ProcessInfo.processInfo.environment
         var fullEnv = env
@@ -61,12 +63,30 @@ class CLIRunner: ObservableObject {
 
                 if let jsonData = trimmed.data(using: .utf8),
                    let event = try? JSONDecoder().decode(CLIJSONEvent.self, from: jsonData) {
+                    lastEventTime = Date()
                     self?.streamContinuation?.yield(event)
                 }
             }
         }
 
+        // Timeout: kill process if no output for 5 minutes
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(300))
+            guard !Task.isCancelled, let self = self else { return }
+
+            stderrLock.lock()
+            let errMsg = String(data: stderrData, encoding: .utf8) ?? "Превышено время ожидания (5 мин)"
+            stderrLock.unlock()
+
+            let errEvent = CLIJSONEvent(eventType: "error", message: "Таймаут: \(errMsg)")
+            self.streamContinuation?.yield(errEvent)
+            self.streamContinuation?.finish()
+            process.terminate()
+        }
+
         process.terminationHandler = { [weak self] proc in
+            self?.timeoutTask?.cancel()
+
             stderrLock.lock()
             let errMsg = String(data: stderrData, encoding: .utf8) ?? "Process exited with code \(proc.terminationStatus)"
             stderrLock.unlock()
@@ -81,6 +101,7 @@ class CLIRunner: ObservableObject {
         do {
             try process.run()
         } catch {
+            timeoutTask?.cancel()
             let errEvent = CLIJSONEvent(eventType: "error", message: "Не удалось запустить CLI: \(error.localizedDescription)")
             continuation?.yield(errEvent)
             continuation?.finish()
@@ -92,10 +113,12 @@ class CLIRunner: ObservableObject {
 
     @MainActor
     func stop() {
+        timeoutTask?.cancel()
         process?.terminate()
         streamContinuation?.finish()
         process = nil
         streamContinuation = nil
+        timeoutTask = nil
     }
 }
 

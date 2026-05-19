@@ -57,11 +57,12 @@ class TelegramExtractor(BaseExtractor):
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        post = soup.find("div", class_="tgme_widget_message_text")
-        if not post:
-            post = soup.find("div", class_="tgme_widget_message")
-
-        text = post.get_text(separator="\n", strip=True) if post else ""
+        post = soup.find("div", class_="tgme_widget_message", attrs={"data-post": f"{channel}/{post_id}"})
+        if post:
+            text_elem = post.find("div", class_="tgme_widget_message_text")
+            text = text_elem.get_text(separator="\n", strip=True) if text_elem else ""
+        else:
+            text = ""
         title = soup.find("title")
         channel_name = title.get_text(strip=True) if title else channel
 

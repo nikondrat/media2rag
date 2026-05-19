@@ -6,14 +6,14 @@ class ModelManager: ObservableObject {
     @Published var openRouterModels: [OpenRouterModel] = []
     @Published var isLoading = false
 
-    func refreshModels(_ backend: String) async {
+    func refreshModels(_ backend: String, apiKey: String = "") async {
         isLoading = true
         defer { isLoading = false }
 
         if backend == "ollama" {
             await fetchOllamaModels()
         } else {
-            await fetchOpenRouterModels()
+            await fetchOpenRouterModels(apiKey: apiKey)
         }
     }
 
@@ -32,11 +32,15 @@ class ModelManager: ObservableObject {
         }
     }
 
-    private func fetchOpenRouterModels() async {
+    private func fetchOpenRouterModels(apiKey: String) async {
         guard let url = URL(string: "https://openrouter.ai/api/v1/models") else { return }
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            if !apiKey.isEmpty {
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+            let (data, _) = try await URLSession.shared.data(for: request)
             let response = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
             openRouterModels = response.data
                 .filter { $0.architecture?.modality == "text/text" }

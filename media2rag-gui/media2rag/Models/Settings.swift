@@ -23,6 +23,9 @@ class SettingsManager: ObservableObject {
     @Published var extractOnly: Bool {
         didSet { UserDefaults.standard.set(extractOnly, forKey: "extractOnly") }
     }
+    @Published var openRouterApiKey: String {
+        didSet { UserDefaults.standard.set(openRouterApiKey, forKey: "openRouterApiKey") }
+    }
 
     init() {
         self.backend = UserDefaults.standard.string(forKey: "backend") ?? "openrouter"
@@ -32,6 +35,7 @@ class SettingsManager: ObservableObject {
         self.whisperLanguage = UserDefaults.standard.string(forKey: "whisperLanguage") ?? "auto"
         self.cliPath = UserDefaults.standard.string(forKey: "cliPath") ?? ""
         self.extractOnly = UserDefaults.standard.bool(forKey: "extractOnly")
+        self.openRouterApiKey = UserDefaults.standard.string(forKey: "openRouterApiKey") ?? ""
     }
 
     func resetToDefaults() {
@@ -42,6 +46,7 @@ class SettingsManager: ObservableObject {
         whisperLanguage = "auto"
         cliPath = ""
         extractOnly = false
+        openRouterApiKey = ""
     }
 
     var resolvedCLIPath: String {

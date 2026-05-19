@@ -21,7 +21,12 @@ class Transformer:
         "- structured_content must be the FULL cleaned content organized with H2/H3 headings\n"
         "- Do NOT add any meta-text like 'Here is the structured content'\n"
         "- Do NOT add separators with commentary\n"
-        "- Escape all quotes in structured_content"
+        "- Escape all quotes in structured_content\n"
+        "- ALL metadata fields (title, topics, summary, key_insights) MUST be in English regardless of source language\n"
+        "- structured_content body should preserve the ORIGINAL language of the source\n"
+        "- CRITICAL: Preserve ALL highlighted/bold/emphasized text, key thesis statements, and core arguments exactly as they convey the main message. "
+        "Never drop paragraphs that contain the author's central thesis, economic logic, or strategic framing — these are the most valuable parts.\n"
+        "- If the original has standalone impactful statements (e.g., 'This sounds like shopping news, but it's actually about the economy'), keep them verbatim."
     )
 
     def __init__(self, llm_client):

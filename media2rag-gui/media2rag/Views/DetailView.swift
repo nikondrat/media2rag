@@ -2,32 +2,63 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct DetailView: View {
-    let item: QueueItem
+    let itemId: UUID
+    @EnvironmentObject var queueManager: QueueManager
     @State private var markdownContent = ""
     @State private var showSavePanel = false
+    @State private var previewMode: PreviewMode = .formatted
+
+    var item: QueueItem? {
+        queueManager.items.first { $0.id == itemId }
+    }
+
+    enum PreviewMode: String, CaseIterable {
+        case formatted = "Предпросмотр"
+        case raw = "Исходник"
+    }
 
     var body: some View {
+        Group {
+            if let item = item {
+                content(for: item)
+            } else {
+                Text("Файл не найден")
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func content(for item: QueueItem) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                headerSection
+                headerSection(for: item)
 
                 if item.state == .completed {
-                    metadataSection
+                    metadataSection(for: item)
                     Divider()
-                    contentSection
+                    contentSection(for: item)
                 } else if item.state == .failed {
-                    errorSection
+                    errorSection(for: item)
                 } else if item.state == .queued {
                     queuedSection
                 } else {
-                    processingSection
+                    processingSection(for: item)
                 }
             }
             .padding(24)
         }
         .frame(minWidth: 500)
+        .id(itemId)
+        .onChange(of: item.state) { _, newState in
+            if newState == .completed {
+                loadContent(from: item.outputURL)
+            }
+        }
         .onAppear {
-            loadContent()
+            if item.state == .completed {
+                loadContent(from: item.outputURL)
+            }
         }
         .fileExporter(
             isPresented: $showSavePanel,
@@ -41,7 +72,7 @@ struct DetailView: View {
         }
     }
 
-    private var headerSection: some View {
+    private func headerSection(for item: QueueItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: item.fileIcon)
@@ -94,7 +125,7 @@ struct DetailView: View {
         }
     }
 
-    private var metadataSection: some View {
+    private func metadataSection(for item: QueueItem) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             if let summary = item.summary {
                 VStack(alignment: .leading, spacing: 8) {
@@ -144,17 +175,35 @@ struct DetailView: View {
         .cornerRadius(12)
     }
 
-    private var contentSection: some View {
+    private func contentSection(for item: QueueItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Содержимое")
-                .font(.headline)
+            HStack {
+                Text("Содержимое")
+                    .font(.headline)
+
+                Spacer()
+
+                Picker("Режим", selection: $previewMode) {
+                    ForEach(PreviewMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+
+                Button(action: { loadContent(from: item.outputURL) }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Обновить")
+            }
 
             if !markdownContent.isEmpty {
-                Text(markdownContent)
-                    .textSelection(.enabled)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .lineSpacing(4)
+                if previewMode == .formatted {
+                    formattedPreview
+                } else {
+                    rawMarkdownView
+                }
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "doc.text")
@@ -167,6 +216,10 @@ struct DetailView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                    Button("Загрузить содержимое") {
+                        loadContent(from: item.outputURL)
+                    }
+                    .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
@@ -174,7 +227,194 @@ struct DetailView: View {
         }
     }
 
-    private var errorSection: some View {
+    private var formattedPreview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(parseMarkdownSections(markdownContent), id: \.id) { section in
+                groupSectionView(section)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(12)
+    }
+
+    @ViewBuilder
+    private func groupSectionView(_ section: MarkdownSection) -> some View {
+        switch section.type {
+        case .heading(let level):
+            Text(section.text)
+                .font(headingFont(for: level))
+                .fontWeight(.semibold)
+                .padding(.top, level == 1 ? 12 : 8)
+                .padding(.bottom, 4)
+        case .bulletList(let items):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(items, id: \.self) { itemText in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•")
+                            .fontWeight(.bold)
+                            .foregroundColor(.accentColor)
+                        RichText(text: itemText)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        case .paragraph:
+            RichText(text: section.text)
+                .padding(.vertical, 2)
+        case .blockquote:
+            RichText(text: section.text)
+                .padding(.leading, 12)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(
+                    Rectangle()
+                        .fill(Color.accentColor.opacity(0.4))
+                        .frame(width: 3)
+                        .padding(.trailing, 8),
+                    alignment: .leading
+                )
+        }
+    }
+
+    private func headingFont(for level: Int) -> Font {
+        switch level {
+        case 1: return .title2
+        case 2: return .title3
+        case 3: return .headline
+        default: return .body.weight(.semibold)
+        }
+    }
+
+    private var rawMarkdownView: some View {
+        Text(markdownContent)
+            .textSelection(.enabled)
+            .font(.system(.body, design: .monospaced))
+            .foregroundColor(.primary)
+            .lineSpacing(4)
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(12)
+    }
+
+    private func parseMarkdownSections(_ content: String) -> [MarkdownSection] {
+        var sections: [MarkdownSection] = []
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+
+        var currentText = ""
+        var currentType: MarkdownSectionType = .paragraph
+        var currentLevel = 0
+        var bulletItems: [String] = []
+        var inFrontmatter = false
+
+        func flushCurrent() {
+            if !currentText.isEmpty {
+                sections.append(MarkdownSection(id: UUID(), text: currentText, level: currentLevel, type: currentType))
+                currentText = ""
+            }
+        }
+
+        func flushBullets() {
+            if !bulletItems.isEmpty {
+                let joined = bulletItems.joined(separator: "\n")
+                sections.append(MarkdownSection(id: UUID(), text: joined, level: 0, type: .bulletList(bulletItems)))
+                bulletItems = []
+            }
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed == "---" {
+                if sections.isEmpty && !inFrontmatter {
+                    inFrontmatter = true
+                    continue
+                } else if inFrontmatter {
+                    inFrontmatter = false
+                    continue
+                }
+            }
+
+            if inFrontmatter {
+                continue
+            }
+
+            let headingMatch = trimmed.firstIndex(of: "#")
+            if let idx = headingMatch, idx == trimmed.startIndex {
+                flushBullets()
+                flushCurrent()
+                let hashCount = trimmed.prefix { $0 == "#" }.count
+                let text = String(trimmed.dropFirst(hashCount)).trimmingCharacters(in: .whitespaces)
+                let cleanText = stripHTML(text)
+                currentText = cleanText
+                currentLevel = hashCount
+                currentType = .heading(hashCount)
+                continue
+            }
+
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
+                flushCurrent()
+                let itemText = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                bulletItems.append(stripHTML(itemText))
+                continue
+            }
+
+            if !bulletItems.isEmpty {
+                flushBullets()
+            }
+
+            if trimmed.hasPrefix("> ") {
+                flushCurrent()
+                let quoteText = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if currentType != .blockquote {
+                    flushCurrent()
+                    currentType = .blockquote
+                }
+                if !currentText.isEmpty {
+                    currentText += "\n" + stripHTML(quoteText)
+                } else {
+                    currentText = stripHTML(quoteText)
+                }
+                continue
+            }
+
+            if currentType != .paragraph {
+                flushCurrent()
+                currentType = .paragraph
+            }
+
+            if !trimmed.isEmpty {
+                if !currentText.isEmpty {
+                    currentText += "\n" + stripHTML(trimmed)
+                } else {
+                    currentText = stripHTML(trimmed)
+                }
+            } else {
+                flushCurrent()
+            }
+        }
+
+        flushBullets()
+        flushCurrent()
+
+        return sections
+    }
+
+    private func stripHTML(_ text: String) -> String {
+        var result = text
+        while let range = result.range(of: "<[^>]+>", options: .regularExpression) {
+            result.removeSubrange(range)
+        }
+        result = result.replacingOccurrences(of: "&amp;", with: "&")
+        result = result.replacingOccurrences(of: "&lt;", with: "<")
+        result = result.replacingOccurrences(of: "&gt;", with: ">")
+        result = result.replacingOccurrences(of: "&quot;", with: "\"")
+        result = result.replacingOccurrences(of: "&#39;", with: "'")
+        result = result.replacingOccurrences(of: "&nbsp;", with: " ")
+        return result.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func errorSection(for item: QueueItem) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
@@ -213,7 +453,7 @@ struct DetailView: View {
         .frame(maxWidth: .infinity, minHeight: 300)
     }
 
-    private var processingSection: some View {
+    private func processingSection(for item: QueueItem) -> some View {
         VStack(spacing: 20) {
             ProgressView()
                 .scaleEffect(1.2)
@@ -242,8 +482,8 @@ struct DetailView: View {
         .frame(maxWidth: .infinity, minHeight: 300)
     }
 
-    private func loadContent() {
-        guard let url = item.outputURL else { return }
+    private func loadContent(from url: URL?) {
+        guard let url = url else { return }
         do {
             markdownContent = try String(contentsOf: url, encoding: .utf8)
         } catch {
@@ -252,10 +492,49 @@ struct DetailView: View {
     }
 
     private func openInFinder() {
-        if let url = item.outputURL {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+        guard let url = item?.outputURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+struct RichText: View {
+    let text: String
+
+    var body: some View {
+        if let attributed = try? AttributedString(markdown: text) {
+            Text(attributed)
+                .font(.body)
+                .lineSpacing(4)
+        } else {
+            Text(text)
+                .font(.body)
+                .lineSpacing(4)
         }
     }
+}
+
+enum MarkdownSectionType: Equatable {
+    case heading(Int)
+    case paragraph
+    case bulletList([String])
+    case blockquote
+
+    static func == (lhs: MarkdownSectionType, rhs: MarkdownSectionType) -> Bool {
+        switch (lhs, rhs) {
+        case (.heading(let l), .heading(let r)): return l == r
+        case (.paragraph, .paragraph): return true
+        case (.bulletList, .bulletList): return true
+        case (.blockquote, .blockquote): return true
+        default: return false
+        }
+    }
+}
+
+struct MarkdownSection: Identifiable {
+    let id: UUID
+    let text: String
+    let level: Int
+    let type: MarkdownSectionType
 }
 
 struct BadgeView: View {

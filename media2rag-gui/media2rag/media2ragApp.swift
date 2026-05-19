@@ -14,7 +14,7 @@ struct media2ragApp: App {
                 .environmentObject(modelManager)
                 .onAppear {
                     Task {
-                        await modelManager.refreshModels(settingsManager.backend)
+                        await modelManager.refreshModels(settingsManager.backend, apiKey: settingsManager.openRouterApiKey)
                     }
                 }
         }

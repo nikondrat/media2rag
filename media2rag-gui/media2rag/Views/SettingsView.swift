@@ -20,7 +20,7 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .onChange(of: settingsManager.backend) { _, newValue in
                         Task {
-                            await modelManager.refreshModels(newValue)
+                            await modelManager.refreshModels(newValue, apiKey: settingsManager.openRouterApiKey)
                             if newValue == "openrouter" && !modelManager.openRouterModels.isEmpty {
                                 settingsManager.model = modelManager.openRouterModels.first?.id ?? "qwen/qwen-plus"
                             } else if newValue == "ollama" && !modelManager.ollamaModels.isEmpty {
@@ -33,6 +33,18 @@ struct SettingsView: View {
                         OllamaModelPicker(settingsManager: settingsManager, modelManager: modelManager)
                     } else {
                         OpenRouterModelPicker(settingsManager: settingsManager, modelManager: modelManager)
+                    }
+
+                    if settingsManager.backend == "openrouter" {
+                        SecureField("OpenRouter API ключ", text: $settingsManager.openRouterApiKey)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: settingsManager.openRouterApiKey) { _, newValue in
+                                if !newValue.isEmpty {
+                                    Task {
+                                        await modelManager.refreshModels("openrouter", apiKey: newValue)
+                                    }
+                                }
+                            }
                     }
                 }
 
@@ -180,7 +192,7 @@ struct OllamaModelPicker: View {
                 } else {
                     Button(action: {
                         Task {
-                            await modelManager.refreshModels("ollama")
+                            await modelManager.refreshModels("ollama", apiKey: "")
                         }
                     }) {
                         Image(systemName: "arrow.clockwise")
@@ -218,7 +230,7 @@ struct OpenRouterModelPicker: View {
                 } else {
                     Button(action: {
                         Task {
-                            await modelManager.refreshModels("openrouter")
+                            await modelManager.refreshModels("openrouter", apiKey: settingsManager.openRouterApiKey)
                         }
                     }) {
                         Image(systemName: "arrow.clockwise")

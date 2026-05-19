@@ -40,7 +40,7 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 420)
         } detail: {
             if let item = selectedItem {
-                DetailView(item: item)
+                DetailView(itemId: item.id)
             } else {
                 EmptyStateView()
             }
