@@ -73,16 +73,32 @@ class CTGPipeline:
 
         if is_large:
             self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="metadata_only")
-            sample = extracted.raw_text[:15000]
+            text = extracted.raw_text
+            mid = len(text) // 4
+            sample = text[mid:mid + 15000]
             _, llm_metadata = self._transformer.transform(sample, extracted.metadata)
 
             metadata = extracted.metadata
             if llm_metadata.topics:
                 metadata.topics = llm_metadata.topics
+            if llm_metadata.domains:
+                metadata.domains = llm_metadata.domains
+            if llm_metadata.core_thesis:
+                metadata.core_thesis = llm_metadata.core_thesis
             if llm_metadata.summary:
                 metadata.summary = llm_metadata.summary
             if llm_metadata.key_insights:
                 metadata.key_insights = llm_metadata.key_insights
+            if llm_metadata.mental_models:
+                metadata.mental_models = llm_metadata.mental_models
+            if llm_metadata.claims:
+                metadata.claims = llm_metadata.claims
+            if llm_metadata.takeaways:
+                metadata.takeaways = llm_metadata.takeaways
+            if llm_metadata.key_terms:
+                metadata.key_terms = llm_metadata.key_terms
+            if llm_metadata.language:
+                metadata.language = llm_metadata.language
 
             structured = self._clean_book_artifacts(extracted.raw_text)
         else:

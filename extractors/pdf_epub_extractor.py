@@ -102,6 +102,7 @@ class PdfEpubExtractor(BaseExtractor):
                 title=source_path.stem,
                 source=str(source_path),
                 doc_type="pdf",
+                language=self._detect_language(raw_text),
                 word_count=len(raw_text.split()),
             ),
             page_count=page_count,
@@ -109,6 +110,7 @@ class PdfEpubExtractor(BaseExtractor):
         )
 
     def _extract_with_ocr(self, page, page_num: int, output_dir: Path) -> str | None:
+        import fitz
         try:
             import pytesseract
             from PIL import Image
@@ -299,6 +301,7 @@ class PdfEpubExtractor(BaseExtractor):
                 source=str(source_path),
                 doc_type="epub",
                 author=author_name,
+                language=self._detect_language(raw_text),
                 word_count=len(raw_text.split()),
             ),
             images=images,
@@ -307,7 +310,7 @@ class PdfEpubExtractor(BaseExtractor):
     def _extract_fallback(self, source_path: Path) -> ExtractedContent:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
-                ["marker_single", str(source_path), tmpdir, "--langs", ",".join(self._cfg.langs)],
+                ["marker", str(source_path), "--output_dir", tmpdir],
                 capture_output=True,
                 text=True,
                 timeout=600,
@@ -329,6 +332,7 @@ class PdfEpubExtractor(BaseExtractor):
                     title=source_path.stem,
                     source=str(source_path),
                     doc_type=self._detect_type(source_path),
+                    language=self._detect_language(raw_text),
                     word_count=len(raw_text.split()),
                 ),
                 page_count=0,
@@ -341,3 +345,14 @@ class PdfEpubExtractor(BaseExtractor):
     def _detect_type(self, path: Path) -> str:
         suffix = path.suffix.lower()
         return {".pdf": "pdf", ".epub": "epub", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx", ".html": "html"}.get(suffix, "document")
+
+    @staticmethod
+    def _detect_language(text: str) -> str:
+        import re
+        cyrillic = len(re.findall(r"[\u0400-\u04FF]", text))
+        latin = len(re.findall(r"[A-Za-z]", text))
+        if cyrillic > latin:
+            return "ru"
+        if latin > 0:
+            return "en"
+        return ""

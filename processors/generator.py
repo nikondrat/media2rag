@@ -25,8 +25,23 @@ class Generator:
         }
         if metadata.author:
             fm["author"] = metadata.author
-        if metadata.topics:
-            fm["topics"] = metadata.topics
+        if metadata.language:
+            fm["language"] = metadata.language
+        if metadata.domains:
+            fm["domains"] = metadata.domains
+        if metadata.core_thesis:
+            fm["core_thesis"] = metadata.core_thesis
+        if metadata.mental_models:
+            fm["mental_models"] = metadata.mental_models
+        if metadata.claims:
+            fm["claims"] = [
+                {"text": c.text, "type": c.type, "confidence": c.confidence}
+                for c in metadata.claims
+            ]
+        if metadata.takeaways:
+            fm["takeaways"] = metadata.takeaways
+        if metadata.key_terms:
+            fm["key_terms"] = metadata.key_terms
         if metadata.summary:
             fm["summary"] = metadata.summary
         if metadata.key_insights:

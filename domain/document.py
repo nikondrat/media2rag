@@ -4,14 +4,28 @@ from typing import Optional
 
 
 @dataclass
+class Claim:
+    text: str
+    type: str  # argument | fact | framework | prediction
+    confidence: str = "strong"  # strong | moderate | speculative
+
+
+@dataclass
 class DocumentMetadata:
     title: str
     source: str
-    doc_type: str  # video, audio, pdf, epub, image
+    doc_type: str
     author: str = ""
-    topics: list[str] = field(default_factory=list)
+    language: str = ""
+    domains: list[str] = field(default_factory=list)
+    core_thesis: str = ""
+    mental_models: list[str] = field(default_factory=list)
+    claims: list[Claim] = field(default_factory=list)
+    takeaways: list[str] = field(default_factory=list)
+    key_terms: list[str] = field(default_factory=list)
     summary: str = ""
     key_insights: list[str] = field(default_factory=list)
+    topics: list[str] = field(default_factory=list)
     word_count: int = 0
 
 

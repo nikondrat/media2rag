@@ -55,6 +55,7 @@ class VideoExtractor(BaseExtractor):
                     title=video_title,
                     source=str(source),
                     doc_type="video",
+                    language=self._cfg.language or "",
                     word_count=len(raw_text.split()),
                 ),
                 duration_seconds=duration,

@@ -41,6 +41,7 @@ class MarkdownExtractor(BaseExtractor):
                 source=fm.get("source", str(source_path)),
                 doc_type=fm.get("type", "transcript"),
                 author=fm.get("author", ""),
+                language=fm.get("language", ""),
                 word_count=fm.get("word_count", 0),
             )
         except yaml.YAMLError:

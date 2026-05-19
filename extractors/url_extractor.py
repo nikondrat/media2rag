@@ -27,6 +27,7 @@ class URLExtractor(BaseExtractor):
         soup = BeautifulSoup(resp.text, "html.parser")
 
         title = self._extract_title(soup)
+        language = self._extract_language(soup)
         content = self._extract_content(soup)
 
         if not content.strip():
@@ -38,6 +39,7 @@ class URLExtractor(BaseExtractor):
                 title=title or urlparse(url).netloc,
                 source=url,
                 doc_type="article",
+                language=language,
                 word_count=len(content.split()),
             ),
         )
@@ -57,6 +59,12 @@ class URLExtractor(BaseExtractor):
                 el = soup.find(tag)
                 if el and el.get_text(strip=True):
                     return el.get_text(strip=True)
+        return ""
+
+    def _extract_language(self, soup: BeautifulSoup) -> str:
+        html = soup.find("html")
+        if html and html.get("lang"):
+            return html["lang"].split("-")[0]
         return ""
 
     def _extract_content(self, soup: BeautifulSoup) -> str:

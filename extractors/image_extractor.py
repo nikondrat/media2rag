@@ -32,6 +32,7 @@ class ImageExtractor(BaseExtractor):
                 title=source_path.stem,
                 source=str(source_path),
                 doc_type="image",
+                language="en",
                 word_count=len(raw_text.split()),
             ),
             images=[{"path": str(source_path), "description": description}],

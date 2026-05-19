@@ -105,6 +105,7 @@ class TelegramExtractor(BaseExtractor):
                 title=channel_name,
                 source=url,
                 doc_type="telegram",
+                language=self._detect_language(text),
                 word_count=len(text.split()),
             ),
         )
@@ -140,6 +141,7 @@ class TelegramExtractor(BaseExtractor):
                 title=f"{channel} — {len(posts)} posts",
                 source=url,
                 doc_type="telegram",
+                language=self._detect_language(content),
                 word_count=len(content.split()),
             ),
         )
@@ -214,3 +216,14 @@ class TelegramExtractor(BaseExtractor):
                 self._progress_callback(page, len(all_posts))
 
         return all_posts
+
+    @staticmethod
+    def _detect_language(text: str) -> str:
+        import re
+        cyrillic = len(re.findall(r"[\u0400-\u04FF]", text))
+        latin = len(re.findall(r"[A-Za-z]", text))
+        if cyrillic > latin:
+            return "ru"
+        if latin > 0:
+            return "en"
+        return ""
