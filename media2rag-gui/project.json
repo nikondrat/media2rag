@@ -1,0 +1,34 @@
+{
+  "files" : {
+    "media2rag\/media2ragApp.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Models\/QueueItem.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Models\/Settings.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Services\/CLIRunner.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Services\/QueueManager.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Views\/ContentView.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Views\/PreviewView.swift" : {
+      "isGroup" : false
+    },
+    "media2rag\/Views\/SettingsView.swift" : {
+      "isGroup" : false
+    }
+  },
+  "name" : "media2rag",
+  "targets" : {
+    "media2rag" : {
+      "type" : "application"
+    }
+  }
+}
