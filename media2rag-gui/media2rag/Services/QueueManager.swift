@@ -46,11 +46,14 @@ class QueueManager: ObservableObject {
         totalProcessed = 0
         totalErrors = 0
 
-        for index in items.indices {
-            guard items[index].state == .queued else { continue }
+        var updatedItems = items
+        for index in updatedItems.indices {
+            guard updatedItems[index].state == .queued else { continue }
 
             currentIndex = index
-            await processItem(&items[index], settings: settings)
+            let updatedItem = await processItem(updatedItems[index], settings: settings)
+            updatedItems[index] = updatedItem
+            items = updatedItems
         }
 
         isProcessing = false
@@ -61,7 +64,8 @@ class QueueManager: ObservableObject {
         isProcessing = false
     }
 
-    private func processItem(_ item: inout QueueItem, settings: SettingsManager) async {
+    private func processItem(_ item: QueueItem, settings: SettingsManager) async -> QueueItem {
+        var item = item
         item.state = .extracting
         item.startedAt = Date()
         item.progress = 0
@@ -71,7 +75,7 @@ class QueueManager: ObservableObject {
             item.state = .failed
             item.errorMessage = "CLI path not configured"
             totalErrors += 1
-            return
+            return item
         }
 
         let events = cliRunner.run(
@@ -83,7 +87,7 @@ class QueueManager: ObservableObject {
         )
 
         for await event in events {
-            switch event.status {
+            switch event.eventType {
             case "extracting":
                 item.state = .extracting
                 item.progress = 0.1
@@ -126,5 +130,7 @@ class QueueManager: ObservableObject {
                 break
             }
         }
+
+        return item
     }
 }

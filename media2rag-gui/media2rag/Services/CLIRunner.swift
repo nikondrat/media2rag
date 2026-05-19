@@ -1,76 +1,84 @@
 import Foundation
 
-@MainActor
 class CLIRunner: ObservableObject {
     private var process: Process?
     private var outputPipe: Pipe?
+    private var streamContinuation: AsyncStream<CLIJSONEvent>.Continuation?
 
+    @MainActor
     func run(
         source: String,
         outputDir: String,
         backend: String,
         model: String,
         cliPath: String
-    ) -> AsyncStream<JSONEvent> {
-        AsyncStream { continuation in
-            let process = Process()
-            let pipe = Pipe()
+    ) -> AsyncStream<CLIJSONEvent> {
+        let stream = AsyncStream<CLIJSONEvent> { [weak self] continuation in
+            self?.streamContinuation = continuation
+        }
 
-            process.executableURL = URL(fileURLWithPath: cliPath)
-            process.arguments = [
-                source,
-                "-o", outputDir,
-                "--backend", backend,
-                "--model", model,
-                "--json"
-            ]
+        let continuation = streamContinuation
+        let process = Process()
+        let pipe = Pipe()
 
-            process.standardOutput = pipe
-            process.standardError = pipe
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = [
+            source,
+            "-o", outputDir,
+            "--backend", backend,
+            "--model", model,
+            "--json"
+        ]
 
-            outputPipe = pipe
-            self.process = process
+        process.standardOutput = pipe
+        process.standardError = pipe
 
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty { return }
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty { return }
 
-                guard let line = String(data: data, encoding: .utf8) else { return }
+            guard let line = String(data: data, encoding: .utf8) else { return }
 
-                for rawLine in line.split(separator: "\n") {
-                    let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty { continue }
+            for rawLine in line.split(separator: "\n") {
+                let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { continue }
 
-                    if let jsonData = trimmed.data(using: .utf8),
-                       let event = try? JSONDecoder().decode(JSONEvent.self, from: jsonData) {
-                        continuation.yield(event)
-                    }
+                if let jsonData = trimmed.data(using: .utf8),
+                   let event = try? JSONDecoder().decode(CLIJSONEvent.self, from: jsonData) {
+                    self?.streamContinuation?.yield(event)
                 }
             }
-
-            process.terminationHandler = { _ in
-                continuation.finish()
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.yield(JSONEvent(status: "error", message: error.localizedDescription))
-                continuation.finish()
-            }
         }
+
+        process.terminationHandler = { [weak self] _ in
+            self?.streamContinuation?.finish()
+        }
+
+        do {
+            try process.run()
+        } catch {
+            let errEvent = CLIJSONEvent(eventType: "error", message: error.localizedDescription)
+            continuation?.yield(errEvent)
+            continuation?.finish()
+        }
+
+        self.process = process
+        return stream
     }
 
+    @MainActor
     func stop() {
         process?.terminate()
+        streamContinuation?.finish()
         process = nil
+        streamContinuation = nil
     }
 }
 
-struct JSONEvent: Codable {
-    let status: String
+struct CLIJSONEvent: Codable, Sendable {
+    let eventType: String
     let file: String?
-    let type: String?
+    let fileType: String?
     let words: Int?
     let chars: Int?
     let current: Int?
@@ -80,4 +88,28 @@ struct JSONEvent: Codable {
     let message: String?
     let processed: Int?
     let errors: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case eventType = "status"
+        case file
+        case fileType = "type"
+        case words, chars, current, total, topics, output, message, processed, errors
+    }
+
+    init(eventType: String, file: String? = nil, fileType: String? = nil, words: Int? = nil,
+         chars: Int? = nil, current: Int? = nil, total: Int? = nil, topics: [String]? = nil,
+         output: String? = nil, message: String? = nil, processed: Int? = nil, errors: Int? = nil) {
+        self.eventType = eventType
+        self.file = file
+        self.fileType = fileType
+        self.words = words
+        self.chars = chars
+        self.current = current
+        self.total = total
+        self.topics = topics
+        self.output = output
+        self.message = message
+        self.processed = processed
+        self.errors = errors
+    }
 }

@@ -63,7 +63,7 @@ struct QueueListView: View {
 
             Divider()
 
-            List(queueManager.items, selection: $queueManager.items) { item in
+            List(queueManager.items, id: \.id) { item in
                 QueueItemRow(item: item)
             }
             .listStyle(.sidebar)
@@ -115,16 +115,17 @@ struct DropZoneView: View {
         .padding()
         .background(Color(nsColor: .windowBackgroundColor))
         .cornerRadius(8)
-        .onDrop(of: [.fileURL, .URL], isTargeted: nil) { providers in
+        .onDrop(of: [.fileURL, .url], isTargeted: nil) { providers in
             for provider in providers {
                 if provider.canLoadObject(ofClass: URL.self) {
-                    provider.loadObject(ofClass: URL.self) { url, _ in
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
                         if let url = url {
                             Task { @MainActor in
                                 queueManager.addSource(url.absoluteString)
                             }
                         }
                     }
+                    return true
                 }
             }
             return true
