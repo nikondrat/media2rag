@@ -128,7 +128,8 @@ class PdfEpubExtractor(BaseExtractor):
                 tag.unwrap()
 
             blocks = []
-            block_tags = {"p", "div", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+            block_tags = {"p", "div", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "body", "html"}
+            root = soup.find("body") or soup
 
             def extract_blocks(element):
                 children = [c for c in element.children if hasattr(c, "name")]
@@ -142,11 +143,15 @@ class PdfEpubExtractor(BaseExtractor):
                     if text and len(text) > 10:
                         blocks.append(text)
 
-            extract_blocks(soup)
+            extract_blocks(root)
 
             text = "\n\n".join(blocks)
             text = re.sub(r"\n{3,}", "\n\n", text)
             text = re.sub(r" {2,}", " ", text)
+            text = re.sub(r" ,", ",", text)
+            text = re.sub(r" \.", ".", text)
+            text = re.sub(r" ;", ";", text)
+            text = re.sub(r" :", ":", text)
 
             text = re.sub(r'([a-z])\n\n([A-Z])\s+([A-Z])\s+([A-Z]{2,})', r'\1\n\n\2\3 \4', text)
             text = re.sub(r'([a-z])\n\n([A-Z])\s+([A-Z]{2,})', r'\1\n\n\2\3', text)
