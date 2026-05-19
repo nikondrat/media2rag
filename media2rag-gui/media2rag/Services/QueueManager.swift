@@ -120,6 +120,15 @@ class QueueManager: ObservableObject {
 
         for await event in events {
             switch event.eventType {
+            case "telegram_channel":
+                items[index].statusMessage = "Скрапинг канала: \(event.totalPosts ?? 0) постов найдено"
+                items[index].progress = 0.05
+            case "telegram_progress":
+                if let current = event.current, let total = event.total {
+                    let pct = Double(current) / Double(total) * 0.3
+                    items[index].progress = 0.05 + pct
+                    items[index].statusMessage = "Пост \(current) из \(total)..."
+                }
             case "extracting":
                 items[index].state = .extracting
                 items[index].statusMessage = "Извлечение содержимого..."

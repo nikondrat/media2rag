@@ -6,6 +6,7 @@ from pathlib import Path
 from config import AppConfig
 from clients.ollama_client import OllamaClient
 from clients.openrouter_client import OpenRouterClient
+from domain.document import ExtractedContent, DocumentMetadata
 from extractors.base import BaseExtractor
 from extractors.pdf_epub_extractor import PdfEpubExtractor
 from extractors.video_extractor import VideoExtractor
@@ -47,7 +48,7 @@ def get_llm_client(cfg: AppConfig, model: str = ""):
 
 def get_extractors(cfg: AppConfig, llm_client) -> list[BaseExtractor]:
     extractors = [
-        TelegramExtractor(),
+        TelegramExtractor(llm_client=llm_client),
         URLExtractor(),
         MarkdownExtractor(),
         PdfEpubExtractor(cfg.marker),
@@ -83,6 +84,12 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
             print(f"❌ No extractor for: {source}")
         sys.exit(1)
 
+    # Special handling for Telegram channels — process each post individually
+    if isinstance(extractor, TelegramExtractor) and isinstance(source, str):
+        channel, post_id = extractor._parse_telegram_url(source)
+        if channel and not post_id:
+            return _process_telegram_channel(extractor, channel, source, cfg, llm_client, output_dir, json_mode)
+
     source_str = str(source)
     if not json_mode:
         print(f"📄 Extracting: {source}")
@@ -100,7 +107,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
         emit_json("extracted", file=source_str, type=doc_type, words=word_count)
 
     if not llm_client:
-        from domain.document import RAGDocument, DocumentMetadata
+        from domain.document import RAGDocument
         doc = RAGDocument(
             markdown=f"# {extracted.metadata.title}\n\n{extracted.raw_text}",
             metadata=extracted.metadata,
@@ -115,6 +122,67 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
     else:
         emit_json("completed", file=source_str, output=str(output_path))
     return output_path
+
+
+def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client, output_dir, json_mode):
+    """Process Telegram channel: scrape all posts, filter, process each through pipeline."""
+    if not json_mode:
+        print(f"📡 Scraping channel: {channel}")
+
+    posts = extractor.extract_all_posts(url)
+    total = len(posts)
+
+    if not json_mode:
+        print(f"   Found {total} posts after filtering")
+    else:
+        emit_json("telegram_channel", channel=channel, total_posts=total, url=url)
+
+    if not posts:
+        if json_mode:
+            emit_json("completed", file=url, output="", message="No posts after filtering")
+        return None
+
+    processed = 0
+    for i, post in enumerate(posts):
+        post_url = post.url
+        if not json_mode:
+            print(f"   [{i+1}/{total}] Post #{post.id} ({post.date[:10] if post.date else '?'})")
+        else:
+            emit_json("telegram_progress", current=i + 1, total=total, post_id=post.id, post_url=post_url)
+
+        extracted = ExtractedContent(
+            raw_text=post.text,
+            metadata=DocumentMetadata(
+                title=f"Post #{post.id}",
+                source=post_url,
+                doc_type="telegram",
+                word_count=len(post.text.split()),
+            ),
+        )
+
+        if not llm_client:
+            from domain.document import RAGDocument
+            doc = RAGDocument(
+                markdown=f"# Post #{post.id}\n\n{post.text}",
+                metadata=extracted.metadata,
+            )
+        else:
+            pipeline = CTGPipeline(llm_client, json_mode=json_mode)
+            doc = pipeline.process(extracted, post_url)
+
+        output_path = doc.save(output_dir)
+        processed += 1
+
+        if json_mode:
+            emit_json("completed", file=post_url, output=str(output_path))
+        elif not json_mode:
+            print(f"      ✅ {output_path.name}")
+
+    if not json_mode:
+        print(f"✅ Channel done: {processed}/{total} posts processed")
+    else:
+        emit_json("telegram_complete", channel=channel, processed=processed, total=total)
+    return output_dir
 
 
 def process_directory(input_dir: Path, cfg: AppConfig, llm_client, output_dir: Path, json_mode: bool = False):

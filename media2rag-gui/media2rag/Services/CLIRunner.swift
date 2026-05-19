@@ -135,17 +135,26 @@ struct CLIJSONEvent: Codable, Sendable {
     let message: String?
     let processed: Int?
     let errors: Int?
+    let totalPosts: Int?
+    let postId: String?
+    let postUrl: String?
+    let channel: String?
 
     enum CodingKeys: String, CodingKey {
         case eventType = "status"
         case file
         case fileType = "type"
         case words, chars, current, total, topics, output, message, processed, errors
+        case totalPosts = "total_posts"
+        case postId = "post_id"
+        case postUrl = "post_url"
+        case channel
     }
 
     init(eventType: String, file: String? = nil, fileType: String? = nil, words: Int? = nil,
          chars: Int? = nil, current: Int? = nil, total: Int? = nil, topics: [String]? = nil,
-         output: String? = nil, message: String? = nil, processed: Int? = nil, errors: Int? = nil) {
+         output: String? = nil, message: String? = nil, processed: Int? = nil, errors: Int? = nil,
+         totalPosts: Int? = nil, postId: String? = nil, postUrl: String? = nil, channel: String? = nil) {
         self.eventType = eventType
         self.file = file
         self.fileType = fileType
@@ -158,5 +167,9 @@ struct CLIJSONEvent: Codable, Sendable {
         self.message = message
         self.processed = processed
         self.errors = errors
+        self.totalPosts = totalPosts
+        self.postId = postId
+        self.postUrl = postUrl
+        self.channel = channel
     }
 }
