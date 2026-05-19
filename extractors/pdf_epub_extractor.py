@@ -69,7 +69,7 @@ class PdfEpubExtractor(BaseExtractor):
     def _extract_epub(self, source_path: Path) -> ExtractedContent:
         import ebooklib
         from ebooklib import epub
-        from bs4 import BeautifulSoup
+        from bs4 import BeautifulSoup, NavigableString
         import re
 
         book = epub.read_epub(source_path)
@@ -99,7 +99,7 @@ class PdfEpubExtractor(BaseExtractor):
             content = item.get_content().decode("utf-8")
             soup = BeautifulSoup(content, "html.parser")
 
-            full_text = soup.get_text(separator=" ", strip=True)
+            full_text = soup.get_text(" ", strip=True)
             lower_text = full_text.lower()
 
             title_el = soup.find(["h1", "h2", "title"])
@@ -114,31 +114,44 @@ class PdfEpubExtractor(BaseExtractor):
             if lower_text.strip().startswith("contents") or lower_text.strip().startswith("table of contents"):
                 continue
 
-            heading_tags = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
-            for h in heading_tags:
+            for h in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
                 level = int(h.name[1])
                 prefix = "#" * min(level + 1, 6)
-                h.insert_before(f"\n\n{prefix} {h.get_text(strip=True)}\n\n")
-                h.decompose()
+                heading_text = h.get_text(strip=True)
+                h.clear()
+                h.string = f"{prefix} {heading_text}"
 
             for br in soup.find_all("br"):
                 br.replace_with("\n")
 
-            for span in soup.find_all("span"):
-                t = span.get_text(strip=True)
-                if len(t) == 1 and t.isupper():
-                    next_sibling = span.next_sibling
-                    if next_sibling and isinstance(next_sibling, str) and next_sibling.strip():
-                        span.insert_after(next_sibling[0])
-                        next_sibling.replace_with(next_sibling[1:])
+            for tag in soup.find_all(["em", "i", "strong", "b", "span", "a"]):
+                tag.unwrap()
 
-            text = soup.get_text(separator=" ", strip=True)
-            text = re.sub(r" {2,}", " ", text)
+            blocks = []
+            block_tags = {"p", "div", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+            def extract_blocks(element):
+                children = [c for c in element.children if hasattr(c, "name")]
+                has_block_child = any(c.name in block_tags for c in children)
+                if has_block_child:
+                    for child in children:
+                        if child.name in block_tags:
+                            extract_blocks(child)
+                else:
+                    text = element.get_text(" ", strip=True)
+                    if text and len(text) > 10:
+                        blocks.append(text)
+
+            extract_blocks(soup)
+
+            text = "\n\n".join(blocks)
             text = re.sub(r"\n{3,}", "\n\n", text)
+            text = re.sub(r" {2,}", " ", text)
 
-            # Fix drop caps: "I N THIS" → "IN THIS", "I N" → "IN"
-            text = re.sub(r'\b([A-Z])\s+([A-Z])\s+([A-Z]{2,})\b', r'\1\2 \3', text)
-            text = re.sub(r'\b([A-Z])\s+([A-Z]{2,})\b', r'\1\2', text)
+            text = re.sub(r'([a-z])\n\n([A-Z])\s+([A-Z])\s+([A-Z]{2,})', r'\1\n\n\2\3 \4', text)
+            text = re.sub(r'([a-z])\n\n([A-Z])\s+([A-Z]{2,})', r'\1\n\n\2\3', text)
+            text = re.sub(r'(?:^|\n\n)([A-Z])\s+([A-Z])\s+([A-Z]{2,})', r'\1\2 \3', text)
+            text = re.sub(r'(?:^|\n\n)([A-Z])\s+([A-Z]{2,})', r'\1\2', text)
 
             if text.strip() and len(text.strip()) > 200:
                 chapters.append(text)

@@ -6,6 +6,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @State private var showDirectoryPicker = false
     @State private var showCLIPicker = false
+    @State private var testResult = ""
+    @State private var testSuccess = false
 
     var body: some View {
         NavigationStack {
@@ -84,6 +86,17 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
+
+                    Button("Проверить CLI") {
+                        Task { await testCLI() }
+                    }
+                    .buttonStyle(.bordered)
+
+                    if !testResult.isEmpty {
+                        Text(testResult)
+                            .font(.caption)
+                            .foregroundColor(testSuccess ? .green : .red)
+                    }
                 }
 
                 Button("Сбросить настройки") {
@@ -117,6 +130,38 @@ struct SettingsView: View {
             }
         }
         .frame(width: 520, height: 620)
+    }
+
+    private func testCLI() async {
+        let cliPath = settingsManager.resolvedCLIPath
+        if cliPath.isEmpty {
+            testResult = "Путь к CLI не указан"
+            testSuccess = false
+            return
+        }
+
+        let process = Process()
+        let pipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/Users/a1/.local/bin/uv")
+        process.arguments = ["run", cliPath, "--help"]
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8) {
+                let firstLine = output.split(separator: "\n").first.map(String.init) ?? ""
+                testResult = "CLI работает: \(firstLine)"
+                testSuccess = true
+            }
+        } catch {
+            testResult = "Ошибка: \(error.localizedDescription)"
+            testSuccess = false
+        }
     }
 }
 

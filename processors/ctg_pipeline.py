@@ -83,8 +83,6 @@ class CTGPipeline:
                 metadata.summary = llm_metadata.summary
             if llm_metadata.key_insights:
                 metadata.key_insights = llm_metadata.key_insights
-            if llm_metadata.title and llm_metadata.title != extracted.metadata.title:
-                metadata.title = llm_metadata.title
 
             structured = self._clean_book_artifacts(extracted.raw_text)
         else:

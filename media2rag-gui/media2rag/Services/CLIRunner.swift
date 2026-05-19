@@ -19,18 +19,18 @@ class CLIRunner: ObservableObject {
         let pipe = Pipe()
 
         let env = ProcessInfo.processInfo.environment
-        let home = NSHomeDirectory()
         var fullEnv = env
-        fullEnv["PATH"] = "\(home)/.cargo/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        fullEnv["HOME"] = home
+        fullEnv["PATH"] = "/Users/a1/.local/bin:/Users/a1/.cargo/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        fullEnv["HOME"] = NSHomeDirectory()
 
         process.environment = fullEnv
 
         if cliPath.hasSuffix(".py") {
             let projectDir = URL(fileURLWithPath: cliPath).deletingLastPathComponent().path
-            let scriptArgs = arguments.joined(separator: " ")
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", "cd \(projectDir) && uv run \(cliPath) \(scriptArgs)"]
+            let uvPath = "/Users/a1/.local/bin/uv"
+            process.executableURL = URL(fileURLWithPath: uvPath)
+            process.arguments = ["run", cliPath] + arguments
+            process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
         } else {
             process.executableURL = URL(fileURLWithPath: cliPath)
             process.arguments = arguments
@@ -63,7 +63,8 @@ class CLIRunner: ObservableObject {
         do {
             try process.run()
         } catch {
-            let errEvent = CLIJSONEvent(eventType: "error", message: error.localizedDescription)
+            let errMsg = "Не удалось запустить CLI: \(error.localizedDescription)\n\nПроверьте путь к CLI и убедитесь, что uv установлен."
+            let errEvent = CLIJSONEvent(eventType: "error", message: errMsg)
             continuation?.yield(errEvent)
             continuation?.finish()
         }
