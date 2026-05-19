@@ -20,6 +20,7 @@ uv run main.py [channel_url]          # legacy: download YouTube transcripts via
 ## Prerequisites
 
 - `brew install ffmpeg` — required for audio/video processing
+- `brew install tesseract` — required for PDF OCR fallback
 - `ollama pull gemma4:26b` — default local model (or set `OLLAMA_CTG_MODEL`)
 - Ollama server must be running at `http://localhost:11434` for local backend
 - `OPENROUTER_API_KEY` env var for cloud backend (also accepts `OPENROUTER_API`)
@@ -33,7 +34,7 @@ uv run main.py [channel_url]          # legacy: download YouTube transcripts via
 
 **Processing flow (cli.py):**
 1. **Extractor** selects by file extension → produces `ExtractedContent`
-   - `extractors/pdf_epub_extractor.py` — marker-pdf for OCR/layout
+   - `extractors/pdf_epub_extractor.py` — PyMuPDF for PDF (with OCR fallback), ebooklib for EPUB (with image extraction)
    - `extractors/video_extractor.py` — yt-dlp + whisper
    - `extractors/audio_extractor.py` — whisper
    - `extractors/image_extractor.py` — Ollama vision (only with Ollama backend)

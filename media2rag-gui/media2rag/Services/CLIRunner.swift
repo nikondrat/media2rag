@@ -2,7 +2,6 @@ import Foundation
 
 class CLIRunner: ObservableObject {
     private var process: Process?
-    private var outputPipe: Pipe?
     private var streamContinuation: AsyncStream<CLIJSONEvent>.Continuation?
 
     @MainActor
@@ -16,7 +15,10 @@ class CLIRunner: ObservableObject {
 
         let continuation = streamContinuation
         let process = Process()
-        let pipe = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        let stderrLock = NSLock()
+        var stderrData = Data()
 
         let env = ProcessInfo.processInfo.environment
         var fullEnv = env
@@ -27,8 +29,7 @@ class CLIRunner: ObservableObject {
 
         if cliPath.hasSuffix(".py") {
             let projectDir = URL(fileURLWithPath: cliPath).deletingLastPathComponent().path
-            let uvPath = "/Users/a1/.local/bin/uv"
-            process.executableURL = URL(fileURLWithPath: uvPath)
+            process.executableURL = URL(fileURLWithPath: "/Users/a1/.local/bin/uv")
             process.arguments = ["run", cliPath] + arguments
             process.currentDirectoryURL = URL(fileURLWithPath: projectDir)
         } else {
@@ -36,10 +37,19 @@ class CLIRunner: ObservableObject {
             process.arguments = arguments
         }
 
-        process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardOutput = outPipe
+        process.standardError = errPipe
 
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                stderrLock.lock()
+                stderrData.append(data)
+                stderrLock.unlock()
+            }
+        }
+
+        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { return }
 
@@ -56,15 +66,22 @@ class CLIRunner: ObservableObject {
             }
         }
 
-        process.terminationHandler = { [weak self] _ in
+        process.terminationHandler = { [weak self] proc in
+            stderrLock.lock()
+            let errMsg = String(data: stderrData, encoding: .utf8) ?? "Process exited with code \(proc.terminationStatus)"
+            stderrLock.unlock()
+
+            if proc.terminationStatus != 0 {
+                let errEvent = CLIJSONEvent(eventType: "error", message: errMsg)
+                self?.streamContinuation?.yield(errEvent)
+            }
             self?.streamContinuation?.finish()
         }
 
         do {
             try process.run()
         } catch {
-            let errMsg = "Не удалось запустить CLI: \(error.localizedDescription)\n\nПроверьте путь к CLI и убедитесь, что uv установлен."
-            let errEvent = CLIJSONEvent(eventType: "error", message: errMsg)
+            let errEvent = CLIJSONEvent(eventType: "error", message: "Не удалось запустить CLI: \(error.localizedDescription)")
             continuation?.yield(errEvent)
             continuation?.finish()
         }

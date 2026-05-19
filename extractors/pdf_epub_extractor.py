@@ -34,23 +34,64 @@ class PdfEpubExtractor(BaseExtractor):
 
     def _extract_with_pymupdf(self, source_path: Path) -> ExtractedContent:
         import fitz
+        import hashlib
 
         doc = fitz.open(source_path)
         pages = []
-        for page in doc:
-            blocks = page.get_text("dict")["blocks"]
-            for block in blocks:
-                if block.get("type") == 0:
-                    for line in block.get("lines", []):
-                        text = "".join(span["text"] for span in line["spans"])
-                        if text.strip():
-                            size = line["spans"][0].get("size", 12)
-                            if size > 16:
-                                pages.append(f"# {text.strip()}")
-                            elif size > 13:
-                                pages.append(f"## {text.strip()}")
-                            else:
-                                pages.append(text.strip())
+        images = []
+        output_dir = source_path.parent / f"{source_path.stem}_images"
+        output_dir.mkdir(exist_ok=True)
+
+        for page_num, page in enumerate(doc):
+            text = page.get_text().strip()
+
+            # OCR fallback if insufficient text
+            if len(text) < 100:
+                text = self._extract_with_ocr(page, page_num, output_dir) or text
+
+            # Extract embedded images
+            page_images = page.get_images(full=True)
+            for img_index, img in enumerate(page_images):
+                xref = img[0]
+                base_image = doc.extract_image(xref)
+                if not base_image:
+                    continue
+                image_bytes = base_image["image"]
+                image_ext = base_image["ext"]
+                img_hash = hashlib.md5(image_bytes).hexdigest()[:8]
+                img_filename = f"pdf_p{page_num+1}_{img_hash}.{image_ext}"
+                img_path = output_dir / img_filename
+                img_path.write_bytes(image_bytes)
+
+                # Get image dimensions
+                width = base_image.get("width", 0)
+                height = base_image.get("height", 0)
+
+                images.append({
+                    "path": str(img_path.relative_to(source_path.parent)),
+                    "page": page_num + 1,
+                    "dimensions": f"{width}x{height}",
+                })
+
+                # Insert markdown image reference after page text
+                if text:
+                    text += f"\n\n![image]({img_path.relative_to(source_path.parent)})"
+
+            if text:
+                blocks = page.get_text("dict")["blocks"]
+                for block in blocks:
+                    if block.get("type") == 0:
+                        for line in block.get("lines", []):
+                            line_text = "".join(span["text"] for span in line["spans"])
+                            if line_text.strip():
+                                size = line["spans"][0].get("size", 12)
+                                if size > 16:
+                                    pages.append(f"# {line_text.strip()}")
+                                elif size > 13:
+                                    pages.append(f"## {line_text.strip()}")
+                                else:
+                                    pages.append(line_text.strip())
+
         page_count = len(doc)
         doc.close()
 
@@ -64,7 +105,38 @@ class PdfEpubExtractor(BaseExtractor):
                 word_count=len(raw_text.split()),
             ),
             page_count=page_count,
+            images=images,
         )
+
+    def _extract_with_ocr(self, page, page_num: int, output_dir: Path) -> str | None:
+        try:
+            import pytesseract
+            from PIL import Image
+        except ImportError:
+            import logging
+            logging.warning("pytesseract not installed. Install with: pip install pytesseract")
+            return None
+
+        try:
+            # Render page to image
+            mat = fitz.Matrix(2, 2)  # 2x zoom for better OCR
+            pix = page.get_pixmap(matrix=mat)
+            img_path = output_dir / f"ocr_p{page_num+1}.png"
+            pix.save(str(img_path))
+
+            # Run OCR
+            langs = "+".join(self._cfg.langs) if self._cfg.langs else "eng"
+            img = Image.open(str(img_path))
+            text = pytesseract.image_to_string(img, lang=langs)
+
+            # Clean up temp image
+            img_path.unlink(missing_ok=True)
+
+            return text.strip()
+        except Exception as e:
+            import logging
+            logging.warning(f"OCR failed for page {page_num+1}: {e}")
+            return None
 
     def _extract_epub(self, source_path: Path) -> ExtractedContent:
         import ebooklib

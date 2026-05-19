@@ -27,9 +27,13 @@ class QueueManager: ObservableObject {
     }
 
     func addSource(_ source: String) {
+        var cleanSource = source.replacingOccurrences(of: "file://", with: "")
+        if let decoded = cleanSource.removingPercentEncoding {
+            cleanSource = decoded
+        }
         let item = QueueItem(
-            source: source,
-            sourceType: SourceType.from(source: source)
+            source: cleanSource,
+            sourceType: SourceType.from(source: cleanSource)
         )
         items.append(item)
     }

@@ -52,7 +52,7 @@ class TelegramExtractor(BaseExtractor):
         return channel, post_id
 
     def _extract_single_post(self, channel: str, post_id: str, url: str) -> ExtractedContent:
-        fetch_url = f"https://t.me/{channel}/{post_id}"
+        fetch_url = f"https://t.me/s/{channel}/{post_id}"
         resp = self._session.get(fetch_url, timeout=30)
         resp.raise_for_status()
 
