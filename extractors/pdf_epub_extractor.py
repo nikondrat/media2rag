@@ -18,48 +18,55 @@ class PdfEpubExtractor(BaseExtractor):
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")
 
+        if source_path.suffix.lower() == ".pdf":
+            return self._extract_pdf(source_path)
+
+        return self._extract_fallback(source_path)
+
+    def _extract_pdf(self, source_path: Path) -> ExtractedContent:
         try:
-            return self._extract_with_marker_python(source_path)
+            return self._extract_with_pymupdf(source_path)
         except ImportError:
-            return self._extract_with_cli(source_path)
+            return self._extract_fallback(source_path)
 
-    def _extract_with_marker_python(self, source_path: Path) -> ExtractedContent:
-        from marker.converters.pdf import PDFConverter
-        from marker.models import create_model_dict
-        from marker.config.parser import ConfigParser
+    def _extract_with_pymupdf(self, source_path: Path) -> ExtractedContent:
+        import fitz
 
-        config_parser = ConfigParser({"langs": self._cfg.langs})
-        converter = PDFConverter(
-            model_dict=create_model_dict(),
-            config=config_parser.generate_config_dict(),
-        )
+        doc = fitz.open(source_path)
+        pages = []
+        for page in doc:
+            blocks = page.get_text("dict")["blocks"]
+            for block in blocks:
+                if block.get("type") == 0:
+                    for line in block.get("lines", []):
+                        text = "".join(span["text"] for span in line["spans"])
+                        if text.strip():
+                            size = line["spans"][0].get("size", 12)
+                            if size > 16:
+                                pages.append(f"# {text.strip()}")
+                            elif size > 13:
+                                pages.append(f"## {text.strip()}")
+                            else:
+                                pages.append(text.strip())
+        page_count = len(doc)
+        doc.close()
 
-        raw_text = converter(source_path).markdown
-        page_count = self._count_pages(source_path)
-
+        raw_text = "\n\n".join(pages)
         return ExtractedContent(
             raw_text=raw_text,
             metadata=DocumentMetadata(
                 title=source_path.stem,
                 source=str(source_path),
-                doc_type=self._detect_type(source_path),
-                original_path=str(source_path),
+                doc_type="pdf",
                 word_count=len(raw_text.split()),
             ),
             page_count=page_count,
         )
 
-    def _extract_with_cli(self, source_path: Path) -> ExtractedContent:
+    def _extract_fallback(self, source_path: Path) -> ExtractedContent:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
-                [
-                    "marker_single",
-                    str(source_path),
-                    tmpdir,
-                    "--batch_multiplier", str(self._cfg.batch_multiplier),
-                ]
-                + (["--langs", ",".join(self._cfg.langs)] if self._cfg.langs else [])
-                + (["--max_pages", str(self._cfg.max_pages)] if self._cfg.max_pages else []),
+                ["marker_single", str(source_path), tmpdir, "--langs", ",".join(self._cfg.langs)],
                 capture_output=True,
                 text=True,
                 timeout=600,
@@ -75,18 +82,15 @@ class PdfEpubExtractor(BaseExtractor):
                 raise RuntimeError("Marker produced no output")
 
             raw_text = output_files[0].read_text(encoding="utf-8")
-            page_count = self._count_pages(source_path)
-
             return ExtractedContent(
                 raw_text=raw_text,
                 metadata=DocumentMetadata(
                     title=source_path.stem,
                     source=str(source_path),
                     doc_type=self._detect_type(source_path),
-                    original_path=str(source_path),
                     word_count=len(raw_text.split()),
                 ),
-                page_count=page_count,
+                page_count=0,
             )
 
     def supports(self, source: Path | str) -> bool:
@@ -96,15 +100,3 @@ class PdfEpubExtractor(BaseExtractor):
     def _detect_type(self, path: Path) -> str:
         suffix = path.suffix.lower()
         return {".pdf": "pdf", ".epub": "epub", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx", ".html": "html"}.get(suffix, "document")
-
-    def _count_pages(self, path: Path) -> int:
-        if path.suffix.lower() == ".pdf":
-            try:
-                import fitz
-                doc = fitz.open(path)
-                count = len(doc)
-                doc.close()
-                return count
-            except ImportError:
-                return 0
-        return 0

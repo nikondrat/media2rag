@@ -31,7 +31,6 @@ class MarkdownExtractor(BaseExtractor):
                 title=source_path.stem,
                 source=str(source_path),
                 doc_type="transcript",
-                original_path=str(source_path),
             )
 
         import yaml
@@ -43,14 +42,12 @@ class MarkdownExtractor(BaseExtractor):
                 doc_type=fm.get("type", "transcript"),
                 author=fm.get("author", ""),
                 word_count=fm.get("word_count", 0),
-                original_path=str(source_path),
             )
         except yaml.YAMLError:
             return DocumentMetadata(
                 title=source_path.stem,
                 source=str(source_path),
                 doc_type="transcript",
-                original_path=str(source_path),
             )
 
     def _strip_frontmatter(self, text: str) -> str:

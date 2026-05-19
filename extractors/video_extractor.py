@@ -56,7 +56,6 @@ class VideoExtractor(BaseExtractor):
                 title=video_path.stem,
                 source=str(source),
                 doc_type="video",
-                original_path=str(video_path),
                 word_count=len(raw_text.split()),
             ),
             duration_seconds=duration,

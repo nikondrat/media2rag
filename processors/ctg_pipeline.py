@@ -25,7 +25,6 @@ class CTGPipeline:
         structured, metadata = self._transformer.transform(compressed, extracted.metadata)
         metadata.source = extracted.metadata.source or metadata.source
         metadata.doc_type = extracted.metadata.doc_type or metadata.doc_type
-        metadata.original_path = extracted.metadata.original_path
         print(f"  [2/3] Transformation: done (topics: {metadata.topics})")
 
         print(f"  [3/3] Generation: assembling RAG markdown...")

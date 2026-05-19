@@ -12,7 +12,6 @@ class DocumentMetadata:
     topics: list[str] = field(default_factory=list)
     summary: str = ""
     key_insights: list[str] = field(default_factory=list)
-    original_path: str = ""
     word_count: int = 0
 
 

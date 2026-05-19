@@ -31,7 +31,5 @@ class Generator:
             fm["summary"] = metadata.summary
         if metadata.key_insights:
             fm["key_insights"] = metadata.key_insights
-        if source_path:
-            fm["original_path"] = source_path
 
         return "---\n" + yaml.dump(fm, allow_unicode=True, sort_keys=False).strip() + "\n---"

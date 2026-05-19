@@ -45,7 +45,6 @@ class AudioExtractor(BaseExtractor):
                 title=source_path.stem,
                 source=str(source_path),
                 doc_type="audio",
-                original_path=str(source_path),
                 word_count=len(raw_text.split()),
             ),
             duration_seconds=duration,
