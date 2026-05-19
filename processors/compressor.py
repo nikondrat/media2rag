@@ -1,12 +1,16 @@
+import re
+
+
 class Compressor:
-    """Remove noise, filler words, and extract core essence from raw content."""
+    """Clean up raw transcripts: remove timestamps, filler words, noise."""
 
     SYSTEM_PROMPT = (
-        "You are a knowledge extraction specialist. Your task is to compress content "
-        "by removing filler words, repetitions, off-topic tangents, and conversational noise. "
-        "Preserve ALL key facts, principles, frameworks, examples, and actionable advice. "
-        "Output should be 40-60% shorter but retain 100% of valuable information. "
-        "Keep the original language (English or Russian)."
+        "Clean up this raw transcript. Remove:\n"
+        "- Timestamps like [0:00], [1:30], [2:56:34]\n"
+        "- Filler words and stutters\n"
+        "- Promotional content and CTAs\n\n"
+        "Preserve ALL facts, numbers, examples, frameworks, quotes, and actionable advice.\n"
+        "Keep the original language. Output ONLY the cleaned text."
     )
 
     def __init__(self, llm_client):
@@ -19,23 +23,26 @@ class Compressor:
         chunks = self._split_into_chunks(raw_text, max_input_tokens)
         if len(chunks) == 1:
             return self._client.chat(
-                prompt=f"Compress this content while preserving all valuable information:\n\n{chunks[0]}",
+                prompt=f"Clean up this raw transcript:\n\n{chunks[0]}",
                 system=self.SYSTEM_PROMPT,
             )
 
         compressed_chunks = []
-        for chunk in chunks:
+        total = len(chunks)
+        for i, chunk in enumerate(chunks, 1):
+            print(f"    Cleaning chunk {i}/{total}...")
             result = self._client.chat(
-                prompt=f"Compress this content while preserving all valuable information:\n\n{chunk}",
+                prompt=f"Clean up this raw transcript:\n\n{chunk}",
                 system=self.SYSTEM_PROMPT,
             )
             compressed_chunks.append(result)
+            print(f"    Chunk {i}/{total} done")
 
-        return "\n\n---\n\n".join(compressed_chunks)
+        return "\n\n".join(compressed_chunks)
 
     def _split_into_chunks(self, text: str, max_chars: int) -> list[str]:
         chars_per_token = 4
-        max_chars_limit = max_input_tokens * chars_per_token
+        max_chars_limit = max_chars * chars_per_token
         if len(text) <= max_chars_limit:
             return [text]
 
@@ -57,3 +64,9 @@ class Compressor:
             chunks.append("\n\n".join(current_chunk))
 
         return chunks
+
+    @staticmethod
+    def clean_artifacts(text: str) -> str:
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r'\[?\d{1,2}:\d{2}(:\d{2})?\]?\s*', '', text)
+        return text.strip()

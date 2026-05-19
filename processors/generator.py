@@ -19,7 +19,7 @@ class Generator:
 
     def _build_frontmatter(self, metadata: DocumentMetadata, source_path: str) -> str:
         fm = {
-            "title": metadata.title,
+            "title": metadata.title or "Untitled",
             "source": metadata.source,
             "type": metadata.doc_type,
         }

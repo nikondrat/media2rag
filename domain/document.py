@@ -33,7 +33,7 @@ class RAGDocument:
 
     def save(self, output_dir: Path) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = _sanitize_filename(self.metadata.title)
+        safe_name = _sanitize_filename(self.metadata.title) or "untitled"
         filepath = output_dir / f"{safe_name}.md"
         filepath.write_text(self.markdown, encoding="utf-8")
         return filepath

@@ -22,17 +22,20 @@ ollama pull gemma4:26b
 ## Usage
 
 ```bash
-# Single file with CTG processing
+# Single file with OpenRouter (fast, default if API key set)
 uv run cli.py path/to/document.pdf
+
+# Specify model
+uv run cli.py document.pdf --model tencent/hy3-preview
+
+# Use local Ollama instead
+uv run cli.py document.pdf --backend ollama --model gemma4:26b
 
 # Batch process directory
 uv run cli.py path/to/folder --batch
 
 # Extract only (no LLM processing)
 uv run cli.py podcast.mp3 --extract-only
-
-# Use OpenRouter instead of Ollama
-uv run cli.py document.pdf --backend openrouter
 
 # Custom output directory
 uv run cli.py video.mp4 -o ./rag-docs

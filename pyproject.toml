@@ -5,6 +5,7 @@ description = "Convert PDF, EPUB, video, audio, images to RAG-ready Markdown"
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
     "marker-pdf>=1.0.0",
     "openai-whisper>=20240930",
     "yt-dlp>=2024.0.0",

@@ -2,21 +2,25 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 @dataclass
 class OllamaConfig:
     base_url: str = "http://localhost:11434"
     ctg_model: str = "gemma4:26b"
     vision_model: str = "gemma4:latest"
-    timeout: int = 120
+    timeout: int = 300
 
 
 @dataclass
 class OpenRouterConfig:
     api_key: str = ""
     base_url: str = "https://openrouter.ai/api/v1"
-    fallback_model: str = "deepseek/deepseek-v3-free"
-    timeout: int = 120
+    default_model: str = "qwen/qwen-plus"
+    timeout: int = 300
 
 
 @dataclass
@@ -51,8 +55,10 @@ class AppConfig:
                 vision_model=os.getenv("OLLAMA_VISION_MODEL", "gemma4:latest"),
             ),
             openrouter=OpenRouterConfig(
-                api_key=os.getenv("OPENROUTER_API_KEY", ""),
-                fallback_model=os.getenv("OPENROUTER_FALLBACK_MODEL", "deepseek/deepseek-v3-free"),
+                api_key=os.getenv(
+                    "OPENROUTER_API_KEY", os.getenv("OPENROUTER_API", "")
+                ),
+                default_model=os.getenv("OPENROUTER_MODEL", "qwen/qwen-plus"),
             ),
             whisper=WhisperConfig(
                 model=os.getenv("WHISPER_MODEL", "large-v3"),

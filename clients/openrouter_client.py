@@ -10,10 +10,10 @@ class OpenRouterClient:
     def __init__(self, cfg: OpenRouterConfig):
         self._base_url = cfg.base_url.rstrip("/")
         self._api_key = cfg.api_key
-        self._model = cfg.fallback_model
+        self._model = cfg.default_model
         self._timeout = cfg.timeout
 
-    def chat(self, prompt: str, system: str = "", model: str = "") -> str:
+    def chat(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000) -> str:
         if not self._api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
 
@@ -27,6 +27,7 @@ class OpenRouterClient:
             "model": model_name,
             "messages": messages,
             "stream": False,
+            "max_tokens": max_tokens,
         }
 
         url = f"{self._base_url}/chat/completions"
@@ -46,7 +47,10 @@ class OpenRouterClient:
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"].strip()
+                content = result.get("choices", [{}])[0].get("message", {}).get("content")
+                if not content:
+                    raise ValueError(f"Empty response from OpenRouter: {result}")
+                return content.strip()
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             raise ConnectionError(f"OpenRouter API error {e.code}: {body}")

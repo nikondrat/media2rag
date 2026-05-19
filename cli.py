@@ -10,30 +10,33 @@ from extractors.pdf_epub_extractor import PdfEpubExtractor
 from extractors.video_extractor import VideoExtractor
 from extractors.audio_extractor import AudioExtractor
 from extractors.image_extractor import ImageExtractor
+from extractors.markdown_extractor import MarkdownExtractor
 from processors.ctg_pipeline import CTGPipeline
 
 
-def get_llm_client(cfg: AppConfig):
-    if cfg.llm_backend == "ollama":
-        client = OllamaClient(cfg.ollama)
-        if not client.is_available():
-            print("⚠️  Ollama not available at", cfg.ollama.base_url)
-            if cfg.openrouter.is_available():
-                print("   Falling back to OpenRouter")
-                return OpenRouterClient(cfg.openrouter)
-            print("   No LLM backend available. Use --extract-only for extraction without CTG.")
-            return None
-        return client
-    else:
+def get_llm_client(cfg: AppConfig, model: str = ""):
+    if cfg.llm_backend == "openrouter" or cfg.openrouter.api_key:
         client = OpenRouterClient(cfg.openrouter)
-        if not client.is_available():
-            print("⚠️  OpenRouter API key not set")
-            return None
+        if client.is_available():
+            if model:
+                client._model = model
+            return client
+        print("⚠️  OpenRouter API key not set")
+
+    client = OllamaClient(cfg.ollama)
+    if client.is_available():
+        if model:
+            client._ctg_model = model
         return client
+    print("⚠️  Ollama not available at", cfg.ollama.base_url)
+
+    print("   No LLM backend available. Use --extract-only for extraction without CTG.")
+    return None
 
 
 def get_extractors(cfg: AppConfig, llm_client) -> list[BaseExtractor]:
     extractors = [
+        MarkdownExtractor(),
         PdfEpubExtractor(cfg.marker),
         VideoExtractor(cfg.whisper),
         AudioExtractor(cfg.whisper),
@@ -106,6 +109,7 @@ def main():
     parser.add_argument("source", help="File path, directory, or URL")
     parser.add_argument("-o", "--output", default="output", help="Output directory")
     parser.add_argument("--backend", choices=["ollama", "openrouter"], help="LLM backend")
+    parser.add_argument("--model", help="LLM model name (overrides default)")
     parser.add_argument("--extract-only", action="store_true", help="Skip CTG, save raw extraction")
     parser.add_argument("--batch", action="store_true", help="Process all files in directory")
     args = parser.parse_args()
@@ -114,7 +118,7 @@ def main():
     if args.backend:
         cfg.llm_backend = args.backend
 
-    llm_client = None if args.extract_only else get_llm_client(cfg)
+    llm_client = None if args.extract_only else get_llm_client(cfg, args.model)
 
     output_dir = Path(args.output)
 

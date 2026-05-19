@@ -18,10 +18,11 @@ class CTGPipeline:
 
         print(f"  [1/3] Compression: {len(extracted.raw_text)} chars → ...")
         compressed = self._compressor.compress(extracted.raw_text)
+        compressed = Compressor.clean_artifacts(compressed)
         print(f"  [1/3] Compression: done ({len(compressed)} chars)")
 
         print(f"  [2/3] Transformation: structuring by topics...")
-        structured, metadata = self._transformer.transform(compressed)
+        structured, metadata = self._transformer.transform(compressed, extracted.metadata)
         metadata.source = extracted.metadata.source or metadata.source
         metadata.doc_type = extracted.metadata.doc_type or metadata.doc_type
         metadata.original_path = extracted.metadata.original_path
