@@ -43,7 +43,10 @@ class ModelManager: ObservableObject {
             let (data, _) = try await URLSession.shared.data(for: request)
             let response = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
             openRouterModels = response.data
-                .filter { $0.architecture?.modality == "text/text" }
+                .filter { model in
+                    guard let modality = model.architecture?.modality else { return true }
+                    return modality.hasSuffix("->text")
+                }
                 .sorted { $0.name < $1.name }
         } catch {
             openRouterModels = [

@@ -8,8 +8,8 @@ class SettingsManager: ObservableObject {
     @Published var model: String {
         didSet { UserDefaults.standard.set(model, forKey: "model") }
     }
-    @Published var outputDirectory: String {
-        didSet { UserDefaults.standard.set(outputDirectory, forKey: "outputDirectory") }
+    @Published var workspaceDirectory: String {
+        didSet { UserDefaults.standard.set(workspaceDirectory, forKey: "workspaceDirectory") }
     }
     @Published var whisperModel: String {
         didSet { UserDefaults.standard.set(whisperModel, forKey: "whisperModel") }
@@ -30,7 +30,7 @@ class SettingsManager: ObservableObject {
     init() {
         self.backend = UserDefaults.standard.string(forKey: "backend") ?? "openrouter"
         self.model = UserDefaults.standard.string(forKey: "model") ?? "qwen/qwen-plus"
-        self.outputDirectory = UserDefaults.standard.string(forKey: "outputDirectory") ?? "\(NSHomeDirectory())/Documents/media2rag"
+        self.workspaceDirectory = UserDefaults.standard.string(forKey: "workspaceDirectory") ?? "\(NSHomeDirectory())/Documents/media2rag"
         self.whisperModel = UserDefaults.standard.string(forKey: "whisperModel") ?? "large-v3"
         self.whisperLanguage = UserDefaults.standard.string(forKey: "whisperLanguage") ?? "auto"
         self.cliPath = UserDefaults.standard.string(forKey: "cliPath") ?? ""
@@ -41,7 +41,7 @@ class SettingsManager: ObservableObject {
     func resetToDefaults() {
         backend = "openrouter"
         model = "qwen/qwen-plus"
-        outputDirectory = "\(NSHomeDirectory())/Documents/media2rag"
+        workspaceDirectory = "\(NSHomeDirectory())/Documents/media2rag"
         whisperModel = "large-v3"
         whisperLanguage = "auto"
         cliPath = ""

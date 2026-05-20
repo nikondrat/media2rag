@@ -29,9 +29,34 @@ macOS native application for converting media to RAG-ready Markdown.
 
 ## Build
 
-1. Open `media2rag.xcodeproj` in Xcode
-2. Set `CLI_PATH` build setting to your `cli.py` path
-3. Build and run
+This project uses [Tuist](https://tuist.dev) for project generation.
+
+### Setup
+
+1. Install Tuist: `brew install tuist`
+2. Generate the Xcode workspace: `tuist generate`
+3. Open `media2rag.xcworkspace` in Xcode
+4. Build and run
+
+### For new developers
+
+```bash
+# Clone the repository
+git clone <repo-url>
+cd media2rag-gui
+
+# Install Tuist
+brew install tuist
+
+# Generate workspace
+tuist generate
+
+# Open in Xcode and build
+open media2rag.xcworkspace
+```
+
+> **Note:** Do not commit `media2rag.xcworkspace`, `media2rag.xcodeproj`, or `Derived/` — they are generated locally.
+> Only `Project.swift`, `Tuist.swift`, and `Tuist/Package.swift` are source-controlled.
 
 ## Architecture
 

@@ -1,10 +1,10 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var modelManager: ModelManager
     @Environment(\.dismiss) var dismiss
-    @State private var showDirectoryPicker = false
     @State private var showCLIPicker = false
     @State private var testResult = ""
     @State private var testSuccess = false
@@ -65,13 +65,17 @@ struct SettingsView: View {
 
                 Section("Вывод") {
                     HStack {
-                        TextField("Папка вывода", text: $settingsManager.outputDirectory)
+                        TextField("Workspace папка", text: $settingsManager.workspaceDirectory)
                             .textFieldStyle(.roundedBorder)
 
-                        Button(action: { showDirectoryPicker = true }) {
+                        Button(action: { selectDirectory() }) {
                             Image(systemName: "folder")
                         }
                     }
+
+                    Text("Единая структура: chunks/, images/, sections/, intermediate/, output/")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("CLI путь") {
@@ -125,14 +129,6 @@ struct SettingsView: View {
                 }
             }
             .fileImporter(
-                isPresented: $showDirectoryPicker,
-                allowedContentTypes: [.folder]
-            ) { result in
-                if case .success(let url) = result {
-                    settingsManager.outputDirectory = url.path
-                }
-            }
-            .fileImporter(
                 isPresented: $showCLIPicker,
                 allowedContentTypes: [.plainText, .unixExecutable, .application]
             ) { result in
@@ -142,6 +138,17 @@ struct SettingsView: View {
             }
         }
         .frame(width: 520, height: 620)
+    }
+
+    private func selectDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            settingsManager.workspaceDirectory = url.path
+        }
     }
 
     private func testCLI() async {
