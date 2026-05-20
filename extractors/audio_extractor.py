@@ -21,7 +21,7 @@ class AudioExtractor(BaseExtractor):
             self._model = whisper.load_model(self._cfg.model, device=self._cfg.device)
         return self._model
 
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         source_path = Path(source) if isinstance(source, str) else source
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")

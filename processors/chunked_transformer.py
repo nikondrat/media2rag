@@ -111,17 +111,17 @@ class ChunkedTransformer:
                 self._emit("map_skip", current=i + 1, total=total)
                 continue
 
-            self._emit("map_chunk", current=i + 1, total=total, chars=len(chunk.text))
-            try:
-                structured, meta = self._transformer.transform_chunk(
-                    chunk.text, chunk.index, chunk.total, shared_meta
-                )
-                self._save_chunk_result(chunk_dir, i, structured, meta)
-                if not shared_meta and meta.domains:
-                    shared_meta = meta
-                self._emit("map_chunk_done", current=i + 1, total=total)
-            except Exception as e:
-                self._emit("map_chunk_error", current=i + 1, error=str(e))
+                self._emit("map_chunk", current=i + 1, total=total, chars=len(chunk.text), chunk_id=i)
+                try:
+                    structured, meta = self._transformer.transform_chunk(
+                        chunk.text, chunk.index, chunk.total, shared_meta
+                    )
+                    self._save_chunk_result(chunk_dir, i, structured, meta)
+                    if not shared_meta and meta.domains:
+                        shared_meta = meta
+                    self._emit("map_chunk_done", current=i + 1, total=total, chunk_id=i)
+                except Exception as e:
+                    self._emit("map_chunk_error", current=i + 1, error=str(e), chunk_id=i)
 
         self._emit("map_done", total_chunks=total)
 
@@ -142,6 +142,24 @@ class ChunkedTransformer:
 
         sections = self._collect_all_sections(chunk_dir, total)
         final_content = self._merge_sections_with_threshold(sections, chunk_dir)
+
+        # Save sections to workspace_dir / "sections"
+        workspace_dir = self._work_dir
+        if workspace_dir:
+            sections_dir = workspace_dir / "sections"
+            sections_dir.mkdir(parents=True, exist_ok=True)
+            section_names = []
+            for section_name, contents in sections.items():
+                if section_name == "_preamble":
+                    continue
+                safe = re.sub(r'[^a-zA-Z0-9а-яА-ЯёЁ_-]', '_', section_name)
+                section_file = sections_dir / f"{safe}.md"
+                combined = "\n\n".join(c for c in contents if c)
+                if combined:
+                    section_file.write_text(f"## {section_name}\n\n{combined}", encoding="utf-8")
+                    section_names.append(section_name)
+            if section_names:
+                self._emit("sections_saved", sections=section_names)
 
         self._emit("reduce_done")
         return final_content, merged_meta

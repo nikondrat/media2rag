@@ -11,7 +11,7 @@ class ImageExtractor(BaseExtractor):
     def __init__(self, vision_client):
         self._vision_client = vision_client
 
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         source_path = Path(source) if isinstance(source, str) else source
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")

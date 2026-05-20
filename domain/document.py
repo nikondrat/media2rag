@@ -34,6 +34,7 @@ class ExtractedContent:
     raw_text: str
     metadata: DocumentMetadata
     images: list[dict] = field(default_factory=list)  # [{"path": ..., "description": ...}]
+    image_paths: list[Path] = field(default_factory=list)
     page_count: int = 0
     duration_seconds: float = 0.0
 
@@ -44,7 +45,13 @@ class RAGDocument:
     metadata: DocumentMetadata
     chunks: list[str] = field(default_factory=list)
 
-    def save(self, output_dir: Path) -> Path:
+    def save(self, output_dir: Path, workspace_dir: Path | None = None) -> Path:
+        if workspace_dir:
+            output_subdir = workspace_dir / "output"
+            output_subdir.mkdir(parents=True, exist_ok=True)
+            filepath = output_subdir / "final.md"
+            filepath.write_text(self.markdown, encoding="utf-8")
+            return filepath
         output_dir.mkdir(parents=True, exist_ok=True)
         safe_name = _sanitize_filename(self.metadata.title) or "untitled"
         filepath = output_dir / f"{safe_name}.md"

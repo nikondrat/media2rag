@@ -57,3 +57,43 @@ class OpenRouterClient:
 
     def is_available(self) -> bool:
         return bool(self._api_key)
+
+    def list_models(self) -> list[dict]:
+        if not self._api_key:
+            raise ValueError("OPENROUTER_API_KEY is not set")
+
+        url = f"{self._base_url}/models"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "HTTP-Referer": "https://github.com/nikondrat/media2rag",
+                "X-Title": "media2rag",
+            },
+            method="GET",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                models = result.get("data", [])
+                return [
+                    {
+                        "id": m["id"],
+                        "name": m.get("name", m["id"]),
+                        "description": m.get("description", ""),
+                        "context_length": m.get("context_length", 0),
+                        "pricing": m.get("pricing", {}),
+                    }
+                    for m in models
+                ]
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise ConnectionError(f"OpenRouter API error {e.code}: {body}")
+
+    def validate_key(self) -> bool:
+        try:
+            self.list_models()
+            return True
+        except Exception:
+            return False

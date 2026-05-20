@@ -41,7 +41,7 @@ class TelegramExtractor(BaseExtractor):
         """Set callback for pagination progress: callback(current_page, total_posts_found)."""
         self._progress_callback = callback
 
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         url = source if isinstance(source, str) else str(source)
         if not self._is_telegram_url(url):
             raise ValueError(f"Not a Telegram URL: {url}")

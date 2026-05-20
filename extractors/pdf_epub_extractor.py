@@ -13,34 +13,38 @@ class PdfEpubExtractor(BaseExtractor):
     def __init__(self, cfg: MarkerConfig):
         self._cfg = cfg
 
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         source_path = Path(source) if isinstance(source, str) else source
         if not source_path.exists():
             raise FileNotFoundError(f"File not found: {source_path}")
 
         suffix = source_path.suffix.lower()
         if suffix == ".pdf":
-            return self._extract_pdf(source_path)
+            return self._extract_pdf(source_path, workspace_dir)
         if suffix == ".epub":
-            return self._extract_epub(source_path)
+            return self._extract_epub(source_path, workspace_dir)
 
         return self._extract_fallback(source_path)
 
-    def _extract_pdf(self, source_path: Path) -> ExtractedContent:
+    def _extract_pdf(self, source_path: Path, workspace_dir: Path | None = None) -> ExtractedContent:
         try:
-            return self._extract_with_pymupdf(source_path)
+            return self._extract_with_pymupdf(source_path, workspace_dir)
         except ImportError:
             return self._extract_fallback(source_path)
 
-    def _extract_with_pymupdf(self, source_path: Path) -> ExtractedContent:
+    def _extract_with_pymupdf(self, source_path: Path, workspace_dir: Path | None = None) -> ExtractedContent:
         import fitz
         import hashlib
 
         doc = fitz.open(source_path)
         pages = []
         images = []
-        output_dir = source_path.parent / f"{source_path.stem}_images"
-        output_dir.mkdir(exist_ok=True)
+        image_paths = []
+        if workspace_dir:
+            output_dir = workspace_dir / "images"
+        else:
+            output_dir = source_path.parent / f"{source_path.stem}_images"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         for page_num, page in enumerate(doc):
             text = page.get_text().strip()
@@ -62,20 +66,22 @@ class PdfEpubExtractor(BaseExtractor):
                 img_filename = f"pdf_p{page_num+1}_{img_hash}.{image_ext}"
                 img_path = output_dir / img_filename
                 img_path.write_bytes(image_bytes)
+                image_paths.append(img_path)
 
                 # Get image dimensions
                 width = base_image.get("width", 0)
                 height = base_image.get("height", 0)
 
+                rel_path = img_path.relative_to(workspace_dir) if workspace_dir else img_path.relative_to(source_path.parent)
                 images.append({
-                    "path": str(img_path.relative_to(source_path.parent)),
+                    "path": str(rel_path),
                     "page": page_num + 1,
                     "dimensions": f"{width}x{height}",
                 })
 
                 # Insert markdown image reference after page text
                 if text:
-                    text += f"\n\n![image]({img_path.relative_to(source_path.parent)})"
+                    text += f"\n\n![image]({rel_path})"
 
             if text:
                 blocks = page.get_text("dict")["blocks"]
@@ -107,6 +113,7 @@ class PdfEpubExtractor(BaseExtractor):
             ),
             page_count=page_count,
             images=images,
+            image_paths=image_paths,
         )
 
     def _extract_with_ocr(self, page, page_num: int, output_dir: Path) -> str | None:
@@ -140,7 +147,7 @@ class PdfEpubExtractor(BaseExtractor):
             logging.warning(f"OCR failed for page {page_num+1}: {e}")
             return None
 
-    def _extract_epub(self, source_path: Path) -> ExtractedContent:
+    def _extract_epub(self, source_path: Path, workspace_dir: Path | None = None) -> ExtractedContent:
         import ebooklib
         from ebooklib import epub
         from bs4 import BeautifulSoup, NavigableString, Tag
@@ -161,8 +168,12 @@ class PdfEpubExtractor(BaseExtractor):
         # Extract images first
         image_items = book.get_items_of_type(ebooklib.ITEM_IMAGE)
         image_map = {}  # filename -> saved path
-        output_dir = source_path.parent / f"{source_path.stem}_images"
-        output_dir.mkdir(exist_ok=True)
+        image_paths = []
+        if workspace_dir:
+            output_dir = workspace_dir / "images"
+        else:
+            output_dir = source_path.parent / f"{source_path.stem}_images"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         for img_item in image_items:
             img_data = img_item.get_content()
@@ -171,7 +182,9 @@ class PdfEpubExtractor(BaseExtractor):
             filename = f"img_{img_hash}{ext}"
             img_path = output_dir / filename
             img_path.write_bytes(img_data)
-            image_map[img_item.file_name] = str(img_path.relative_to(source_path.parent))
+            image_paths.append(img_path)
+            rel_path = img_path.relative_to(workspace_dir) if workspace_dir else img_path.relative_to(source_path.parent)
+            image_map[img_item.file_name] = str(rel_path)
 
         skip_title_patterns = [
             "copyright", "acknowledgment", "acknowledgement", "dedication",
@@ -305,6 +318,7 @@ class PdfEpubExtractor(BaseExtractor):
                 word_count=len(raw_text.split()),
             ),
             images=images,
+            image_paths=image_paths,
         )
 
     def _extract_fallback(self, source_path: Path) -> ExtractedContent:

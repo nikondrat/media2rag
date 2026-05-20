@@ -73,7 +73,7 @@ def emit_json(status: str, **kwargs):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
 
 
-def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: Path, json_mode: bool = False):
+def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False):
     extractors = get_extractors(cfg, llm_client)
     extractor = find_extractor(source, extractors)
 
@@ -88,7 +88,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
     if isinstance(extractor, TelegramExtractor) and isinstance(source, str):
         channel, post_id = extractor._parse_telegram_url(source)
         if channel and not post_id:
-            return _process_telegram_channel(extractor, channel, source, cfg, llm_client, output_dir, json_mode)
+            return _process_telegram_channel(extractor, channel, source, cfg, llm_client, workspace_dir, json_mode)
 
     source_str = str(source)
     if not json_mode:
@@ -97,7 +97,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
     if json_mode:
         emit_json("extracting", file=source_str, type=extractor.__class__.__name__)
 
-    extracted = extractor.extract(source)
+    extracted = extractor.extract(source, workspace_dir=workspace_dir)
     doc_type = extracted.metadata.doc_type
     word_count = extracted.metadata.word_count
 
@@ -106,10 +106,14 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
     else:
         emit_json("extracted", file=source_str, type=doc_type, words=word_count)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     from domain.document import _sanitize_filename
-    safe_name = _sanitize_filename(extracted.metadata.title) or Path(source_str).stem
-    intermediate_path = output_dir / f"{safe_name}_raw.md"
+    file_stem = _sanitize_filename(extracted.metadata.title) or Path(source_str).stem
+    file_workspace = workspace_dir / file_stem
+    file_workspace.mkdir(parents=True, exist_ok=True)
+    for subdir in ["chunks", "images", "sections", "intermediate", "output"]:
+        (file_workspace / subdir).mkdir(exist_ok=True)
+
+    intermediate_path = file_workspace / "intermediate" / "raw.md"
     intermediate_path.write_text(
         f"# {extracted.metadata.title}\n\n{extracted.raw_text}",
         encoding="utf-8",
@@ -124,17 +128,20 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
         )
     else:
         pipeline = CTGPipeline(llm_client, json_mode=json_mode)
-        doc = pipeline.process(extracted, source_str)
+        doc = pipeline.process(extracted, source_str, workspace_dir=file_workspace)
 
-    output_path = doc.save(output_dir)
+    output_path = doc.save(Path(), workspace_dir=file_workspace)
     if not json_mode:
         print(f"✅ Saved: {output_path}")
     else:
-        emit_json("completed", file=source_str, output=str(output_path), intermediate=intermediate_str)
+        emit_json("completed", file=source_str, output=str(output_path), intermediate=intermediate_str,
+                  work_dir=str(file_workspace),
+                  sections=[p.stem for p in sorted((file_workspace / "sections").glob("*.md"))] if (file_workspace / "sections").exists() else [],
+                  images=[str(p) for p in extracted.image_paths])
     return output_path
 
 
-def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client, output_dir, json_mode):
+def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client, workspace_dir, json_mode):
     """Process Telegram channel: scrape all posts, filter, process each through pipeline."""
     if not json_mode:
         print(f"📡 Scraping channel: {channel}")
@@ -181,9 +188,9 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
             )
         else:
             pipeline = CTGPipeline(llm_client, json_mode=json_mode)
-            doc = pipeline.process(extracted, post_url)
+            doc = pipeline.process(extracted, post_url, workspace_dir=workspace_dir)
 
-        output_path = doc.save(output_dir)
+        output_path = doc.save(Path(), workspace_dir=workspace_dir)
         output_paths.append(str(output_path))
         total_words += len(post.text.split())
         processed += 1
@@ -197,10 +204,10 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
         emit_json("telegram_complete", channel=channel, processed=processed, total=total,
                   output_files=output_paths, words=total_words)
         emit_json("completed", file=url, output=output_paths[0] if output_paths else "", words=total_words)
-    return output_dir
+    return workspace_dir
 
 
-def process_directory(input_dir: Path, cfg: AppConfig, llm_client, output_dir: Path, json_mode: bool = False):
+def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False):
     extractors = get_extractors(cfg, llm_client)
     files = [f for f in input_dir.rglob("*") if f.is_file()]
     processed = 0
@@ -225,7 +232,7 @@ def process_directory(input_dir: Path, cfg: AppConfig, llm_client, output_dir: P
             emit_json("batch_progress", current=i + 1, total=total, file=str(f))
 
         try:
-            process_single(f, cfg, llm_client, output_dir, json_mode=json_mode)
+            process_single(f, cfg, llm_client, workspace_dir, json_mode=json_mode)
             processed += 1
         except Exception as e:
             if json_mode:
@@ -243,7 +250,7 @@ def process_directory(input_dir: Path, cfg: AppConfig, llm_client, output_dir: P
 def main():
     parser = argparse.ArgumentParser(description="Convert media to RAG-ready Markdown")
     parser.add_argument("source", help="File path, directory, or URL")
-    parser.add_argument("-o", "--output", default="output", help="Output directory")
+    parser.add_argument("-o", "--output", "--workspace", dest="workspace", default=None, help="Workspace directory")
     parser.add_argument("--backend", choices=["ollama", "openrouter"], help="LLM backend")
     parser.add_argument("--model", help="LLM model name (overrides default)")
     parser.add_argument("--extract-only", action="store_true", help="Skip CTG, save raw extraction")
@@ -257,7 +264,7 @@ def main():
 
     llm_client = None if args.extract_only else get_llm_client(cfg, args.model)
 
-    output_dir = Path(args.output)
+    workspace_dir = _resolve_workspace(args.workspace, cfg)
 
     if args.source.startswith("http"):
         source = args.source
@@ -265,9 +272,19 @@ def main():
         source = Path(args.source)
 
     if args.batch or (isinstance(source, Path) and source.is_dir()):
-        process_directory(source, cfg, llm_client, output_dir, json_mode=args.json)
+        process_directory(source, cfg, llm_client, workspace_dir, json_mode=args.json)
     else:
-        process_single(source, cfg, llm_client, output_dir, json_mode=args.json)
+        process_single(source, cfg, llm_client, workspace_dir, json_mode=args.json)
+
+
+def _resolve_workspace(cli_arg: str | None, cfg: AppConfig) -> Path:
+    if cli_arg:
+        return Path(cli_arg)
+    if cfg.workspace_dir:
+        return cfg.workspace_dir
+    if cfg.output_dir and cfg.output_dir != Path("output"):
+        return cfg.output_dir
+    return Path.home() / "Documents" / "media2rag"
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from domain.document import ExtractedContent
 
 class BaseExtractor(ABC):
     @abstractmethod
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         """Extract content from file path or URL."""
         ...
 

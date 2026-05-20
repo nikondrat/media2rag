@@ -16,7 +16,7 @@ class URLExtractor(BaseExtractor):
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         })
 
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         url = source if isinstance(source, str) else str(source)
         if not url.startswith("http"):
             raise ValueError(f"Not a URL: {url}")

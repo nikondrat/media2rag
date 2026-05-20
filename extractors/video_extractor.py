@@ -23,7 +23,7 @@ class VideoExtractor(BaseExtractor):
             self._model = whisper.load_model(self._cfg.model, device=self._cfg.device)
         return self._model
 
-    def extract(self, source: Path | str) -> ExtractedContent:
+    def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:
         is_url = isinstance(source, str) and self._is_url(source)
         tmpdir_ctx = tempfile.TemporaryDirectory() if is_url else None
 

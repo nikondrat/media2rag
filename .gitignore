@@ -11,3 +11,7 @@ transcripts/
 .env
 .chunks/
 opencode.json
+media2rag-gui/*.xcworkspace/
+media2rag-gui/*.xcodeproj/
+media2rag-gui/Derived/
+media2rag-gui/Tuist/.Package.resolved

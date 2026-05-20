@@ -44,10 +44,12 @@ class AppConfig:
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     marker: MarkerConfig = field(default_factory=MarkerConfig)
     output_dir: Path = field(default_factory=lambda: Path("output"))
+    workspace_dir: Path | None = None
     llm_backend: str = "ollama"  # ollama or openrouter
 
     @classmethod
     def from_env(cls) -> "AppConfig":
+        workspace_env = os.getenv("WORKSPACE")
         return cls(
             ollama=OllamaConfig(
                 base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -65,5 +67,6 @@ class AppConfig:
                 device=os.getenv("WHISPER_DEVICE", "cpu"),
             ),
             output_dir=Path(os.getenv("OUTPUT_DIR", "output")),
+            workspace_dir=Path(workspace_env) if workspace_env else None,
             llm_backend=os.getenv("LLM_BACKEND", "ollama"),
         )

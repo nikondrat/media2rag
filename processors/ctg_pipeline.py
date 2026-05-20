@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 
 from domain.document import ExtractedContent, RAGDocument
 from processors.compressor import Compressor
@@ -25,7 +26,7 @@ class CTGPipeline:
             obj = {"status": status, **kwargs}
             print(json.dumps(obj, ensure_ascii=False), flush=True)
 
-    def process(self, extracted: ExtractedContent, source_path: str = "") -> RAGDocument:
+    def process(self, extracted: ExtractedContent, source_path: str = "", workspace_dir: Path | None = None) -> RAGDocument:
         if not extracted.raw_text.strip():
             raise ValueError("No content to process")
 
@@ -34,7 +35,7 @@ class CTGPipeline:
         if is_large:
             self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="map_reduce")
             self._chunked_transformer = ChunkedTransformer(
-                self._compressor._client, json_mode=self._json_mode
+                self._compressor._client, json_mode=self._json_mode, work_dir=workspace_dir
             )
             structured, metadata = self._chunked_transformer.map_reduce(
                 extracted.raw_text, extracted.metadata, source_path=source_path
