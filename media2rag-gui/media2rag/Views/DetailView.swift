@@ -14,6 +14,7 @@ struct DetailView: View {
     @State private var lazySectionsLoaded = false
     @State private var currentPage = 0
     @State private var sectionsPerPage = 50
+    @State private var isLoading = false
     private let paginationThreshold = 200
 
     var item: QueueItem? {
@@ -44,9 +45,13 @@ struct DetailView: View {
                 headerSection(for: item)
 
                 if item.state == .completed {
-                    metadataSection(for: item)
-                    Divider()
-                    contentSection(for: item)
+                    if isLoading {
+                        loadingSkeleton
+                    } else {
+                        metadataSection(for: item)
+                        Divider()
+                        contentSection(for: item)
+                    }
                 } else if item.state == .failed {
                     errorSection(for: item)
                 } else if item.state == .queued {
@@ -59,6 +64,14 @@ struct DetailView: View {
         }
         .frame(minWidth: 500)
         .id(itemId)
+        .onChange(of: itemId) { _, newId in
+            resetState()
+            if let newItem = queueManager.items.first(where: { $0.id == newId }), newItem.state == .completed {
+                loadContent(from: newItem.outputURL)
+                loadIntermediate(from: newItem.workspaceURL?.appendingPathComponent("intermediate/raw.md"))
+                initMmapReader(for: newItem.outputURL)
+            }
+        }
         .onChange(of: item.state) { _, newState in
             if newState == .completed {
                 loadContent(from: item.outputURL)
@@ -69,7 +82,10 @@ struct DetailView: View {
         .onAppear {
             if item.state == .completed {
                 loadContent(from: item.outputURL)
-                loadIntermediate(from: item.workspaceURL?.appendingPathComponent("intermediate/raw.md"))
+                loadIntermediate(
+                    from: item.workspaceURL?
+                        .appendingPathComponent("intermediate/raw.md")
+                )
                 initMmapReader(for: item.outputURL)
             }
         }
@@ -207,7 +223,7 @@ struct DetailView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 180)
+                    .frame(maxWidth: 220)
 
                     Button(action: { loadContent(from: item.outputURL) }) {
                         Image(systemName: "arrow.clockwise")
@@ -309,42 +325,46 @@ struct DetailView: View {
 
     private var formattedPreview: some View {
         Group {
-            if !sections.isEmpty && lazySectionsLoaded {
-                VStack(spacing: 0) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(Array(paginatedSectionRange), id: \.self) { index in
-                                if let content = loadSectionContent(index) {
-                                    let parsedSections = parseMarkdownSections(content)
-                                    ForEach(parsedSections, id: \.id) { section in
-                                        groupSectionView(section)
+            if !markdownContent.isEmpty {
+                if !sections.isEmpty && lazySectionsLoaded && sections.count > paginationThreshold {
+                    VStack(spacing: 0) {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(Array(paginatedSectionRange), id: \.self) { index in
+                                    if let content = loadSectionContent(index) {
+                                        let parsedSections = parseMarkdownSections(content)
+                                        ForEach(parsedSections, id: \.id) { section in
+                                            groupSectionView(section)
+                                        }
                                     }
                                 }
+                            }
+                            .padding()
+                        }
+
+                        if showPagination {
+                            pageNavigation
+                        }
+                    }
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(12)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(parseMarkdownSections(markdownContent), id: \.id) { section in
+                                groupSectionView(section)
                             }
                         }
                         .padding()
                     }
-
-                    if showPagination {
-                        pageNavigation
-                    }
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(12)
                 }
-                .background(Color(nsColor: .controlBackgroundColor))
-                .cornerRadius(12)
-            } else if !markdownContent.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(parseMarkdownSections(markdownContent), id: \.id) { section in
-                        groupSectionView(section)
-                    }
-                }
-                .padding()
-                .background(Color(nsColor: .controlBackgroundColor))
-                .cornerRadius(12)
             } else {
                 Color.clear
             }
         }
-        .id(currentPage)
+        .id(itemId)
     }
 
     private var pageNavigation: some View {
@@ -403,13 +423,30 @@ struct DetailView: View {
 
     private func loadSectionContent(_ index: Int) -> String? {
         if let cached = sectionCache[index] {
+            print("[DetailView] loadSectionContent: cache hit, index=\(index), length=\(cached.count)")
             return cached
         }
         if let reader = mmapReader, !sections.isEmpty {
             if let content = reader.getSectionContent(index: index, sections: sections) {
                 sectionCache[index] = content
+                print("[DetailView] loadSectionContent: loaded, index=\(index), length=\(content.count)")
                 return content
             }
+            print("[DetailView] loadSectionContent: reader returned nil, index=\(index)")
+        } else {
+            print("[DetailView] loadSectionContent: no reader or sections, index=\(index), hasReader=\(mmapReader != nil), sections.count=\(sections.count)")
+        }
+        return nil
+    
+        if let reader = mmapReader, !sections.isEmpty {
+            if let content = reader.getSectionContent(index: index, sections: sections) {
+                sectionCache[index] = content
+                print("[DetailView] loadSectionContent: loaded, index=\(index), length=\(content.count)")
+                return content
+            }
+            print("[DetailView] loadSectionContent: reader returned nil, index=\(index)")
+        } else {
+            print("[DetailView] loadSectionContent: no reader or sections, index=\(index), hasReader=\(mmapReader != nil), sections.count=\(sections.count)")
         }
         return nil
     }
@@ -686,29 +723,87 @@ struct DetailView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            if item.state == .mapReduce && !item.chunks.isEmpty {
+                Divider()
+                    .padding(.vertical, 8)
+                chunkProgressPanel(for: item)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 300)
     }
 
+    private func chunkProgressPanel(for item: QueueItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Чанки: \(item.chunks.filter { $0.status == .done }.count)/\(item.chunks.count)")
+                    .font(.headline)
+                Spacer()
+                Text("\(Int(Double(item.chunks.filter { $0.status == .done }.count) / Double(item.chunks.count) * 100))%")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(item.chunks) { chunk in
+                        ChunkStatusView(chunk: chunk)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(12)
+    }
+
+    private var loadingSkeleton: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SkeletonBlock(height: 28, width: 200)
+            SkeletonBlock(height: 16, width: 300)
+            SkeletonBlock(height: 16, width: 250)
+            Divider()
+            SkeletonBlock(height: 14, width: 400)
+            SkeletonBlock(height: 14, width: 350)
+            SkeletonBlock(height: 14, width: 380)
+            SkeletonBlock(height: 14, width: 280)
+            SkeletonBlock(height: 14, width: 420)
+            SkeletonBlock(height: 14, width: 320)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func loadContent(from url: URL?) {
         guard let url = url else { return }
-        do {
-            markdownContent = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            markdownContent = "Не удалось загрузить: \(error.localizedDescription)"
+        isLoading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let content = (try? String(contentsOf: url, encoding: .utf8)) ?? "Не удалось загрузить"
+            DispatchQueue.main.async {
+                self.markdownContent = content
+                self.isLoading = false
+            }
         }
     }
 
     private func initMmapReader(for url: URL?) {
-        guard let url = url, FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let url = url, FileManager.default.fileExists(atPath: url.path) else {
+            print("[DetailView] initMmapReader: file does not exist, url=\(url?.path ?? "nil")")
+            return
+        }
+        print("[DetailView] initMmapReader: starting, file=\(url.lastPathComponent)")
         let reader = MmapFileReader(url: url)
         do {
             try reader.open()
             let scannedSections = reader.scanSections()
+            print("[DetailView] initMmapReader: scanned \(scannedSections.count) sections")
             mmapReader = reader
             sections = scannedSections
             lazySectionsLoaded = !scannedSections.isEmpty
+            print("[DetailView] initMmapReader: lazySectionsLoaded=\(lazySectionsLoaded)")
         } catch {
+            print("[DetailView] initMmapReader: error=\(error)")
             mmapReader = nil
             sections = []
             lazySectionsLoaded = false
@@ -733,9 +828,39 @@ struct DetailView: View {
         }
     }
 
+    private func resetState() {
+        mmapReader?.close()
+        mmapReader = nil
+        sections = []
+        sectionCache = [:]
+        lazySectionsLoaded = false
+        currentPage = 0
+        markdownContent = ""
+        intermediateContent = ""
+        isLoading = false
+    }
+
     private func openInFinder() {
         guard let url = item?.outputURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+struct SkeletonBlock: View {
+    let height: CGFloat
+    let width: CGFloat
+    @State private var isAnimating = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(.quaternary)
+            .frame(width: width, height: height)
+            .opacity(isAnimating ? 0.3 : 0.7)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    isAnimating.toggle()
+                }
+            }
     }
 }
 
@@ -858,5 +983,23 @@ struct MarkdownDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         let data = content.data(using: .utf8) ?? Data()
         return FileWrapper(regularFileWithContents: data)
+    }
+}
+
+struct ChunkStatusView: View {
+    let chunk: ChunkInfo
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Image(systemName: chunk.status.icon)
+                .font(.system(size: 10))
+                .foregroundColor(chunk.status.color)
+            Text("\(chunk.id)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(width: 28, height: 28)
+        .background(chunk.status.color.opacity(0.1))
+        .cornerRadius(6)
     }
 }

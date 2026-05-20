@@ -111,17 +111,19 @@ class ChunkedTransformer:
                 self._emit("map_skip", current=i + 1, total=total)
                 continue
 
-                self._emit("map_chunk", current=i + 1, total=total, chars=len(chunk.text), chunk_id=i)
-                try:
-                    structured, meta = self._transformer.transform_chunk(
-                        chunk.text, chunk.index, chunk.total, shared_meta
-                    )
-                    self._save_chunk_result(chunk_dir, i, structured, meta)
-                    if not shared_meta and meta.domains:
-                        shared_meta = meta
-                    self._emit("map_chunk_done", current=i + 1, total=total, chunk_id=i)
-                except Exception as e:
-                    self._emit("map_chunk_error", current=i + 1, error=str(e), chunk_id=i)
+            self._emit("map_chunk", current=i + 1, total=total, chars=len(chunk.text), chunk_id=i)
+            try:
+                structured, meta = self._transformer.transform_chunk(
+                    chunk.text, chunk.index, chunk.total, shared_meta
+                )
+                self._save_chunk_result(chunk_dir, i, structured, meta)
+                if not shared_meta and meta.domains:
+                    shared_meta = meta
+                self._emit("map_chunk_done", current=i + 1, total=total, chunk_id=i)
+            except Exception as e:
+                self._emit("map_chunk_error", current=i + 1, error=str(e), chunk_id=i)
+                raise
+                raise
 
         self._emit("map_done", total_chunks=total)
 

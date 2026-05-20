@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 @MainActor
 class QueueManager: ObservableObject {
@@ -8,9 +9,11 @@ class QueueManager: ObservableObject {
     @Published var currentIndex = 0
     @Published var totalProcessed = 0
     @Published var totalErrors = 0
+    @Published var selectedItemId: UUID?
 
     private var cliRunner = CLIRunner()
     private var settingsManager: SettingsManager?
+    var toastManager: ToastManager?
 
     var totalCount: Int { items.count }
     var queuedCount: Int { items.filter { $0.state == .queued }.count }
@@ -151,6 +154,7 @@ class QueueManager: ObservableObject {
                     items[index].wordCount = words
                 }
                 totalProcessed += 1
+                toastManager?.show(message: "✅ \(items[index].fileName) — \(event.processed ?? 0) постов", type: .success)
             case "large_doc_detected":
                 items[index].state = .mapReduce
                 items[index].statusMessage = "Большой документ: обработка по частям..."
@@ -253,6 +257,7 @@ class QueueManager: ObservableObject {
                         items[index].outputURL = URL(fileURLWithPath: output)
                     }
                     totalProcessed += 1
+                    toastManager?.show(message: "✅ \(items[index].fileName) — готово", type: .success)
                 }
             case "error":
                 items[index].state = .failed
@@ -260,6 +265,8 @@ class QueueManager: ObservableObject {
                 items[index].errorMessage = event.message ?? "Неизвестная ошибка"
                 items[index].completedAt = Date()
                 totalErrors += 1
+                let msg = event.message ?? "Неизвестная ошибка"
+                toastManager?.show(message: "❌ \(items[index].fileName) — \(msg)", type: .error)
             default:
                 break
             }
@@ -322,6 +329,122 @@ class QueueManager: ObservableObject {
             }
         } catch {
             // Ignore metadata parsing errors
+        }
+    }
+
+    func processSingle(_ item: QueueItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }), !isProcessing else { return }
+        guard let settings = settingsManager else { return }
+        Task {
+            await processItem(index: index, settings: settings)
+        }
+    }
+
+    func openWorkspace(for item: QueueItem) {
+        guard let url = item.outputURL?.deletingLastPathComponent() else {
+            if let wsURL = item.workspaceURL {
+                NSWorkspace.shared.open(wsURL)
+            }
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    func copyPath(for item: QueueItem) {
+        var path = item.source
+        if let output = item.outputURL?.path {
+            path = output
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+        toastManager?.show(message: "📋 Путь скопирован: \((path as NSString).lastPathComponent)", type: .info)
+    }
+
+    func retryItem(_ item: QueueItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }), !isProcessing else { return }
+        guard let settings = settingsManager else { return }
+        items[index].state = .queued
+        items[index].progress = 0
+        items[index].statusMessage = ""
+        items[index].errorMessage = nil
+        Task {
+            await processItem(index: index, settings: settings)
+        }
+    }
+
+    func reorder(from source: IndexSet, to destination: Int) {
+        items.move(fromOffsets: source, toOffset: destination)
+    }
+
+    func loadExistingFiles() {
+        guard let settings = settingsManager else { return }
+        let workspaceURL = URL(fileURLWithPath: settings.workspaceDirectory)
+
+        guard FileManager.default.fileExists(atPath: workspaceURL.path) else { return }
+
+        do {
+            let subdirs = try FileManager.default.contentsOfDirectory(atPath: workspaceURL.path)
+                .filter { !$0.hasPrefix(".") }
+
+            var loadedCount = 0
+
+            for subdir in subdirs {
+                let subdirURL = workspaceURL.appendingPathComponent(subdir)
+                let outputURL = subdirURL.appendingPathComponent("output/final.md")
+                let hasFinal = FileManager.default.fileExists(atPath: outputURL.path)
+                
+                let chunkDir = subdirURL.appendingPathComponent(subdir)
+                let hasChunks = FileManager.default.fileExists(atPath: chunkDir.path)
+                
+                guard hasFinal || hasChunks else { continue }
+
+                let sourcePath = hasFinal ? outputURL.path : chunkDir.path
+                var item = QueueItem(
+                    source: sourcePath,
+                    sourceType: .markdown
+                )
+                item.outputURL = hasFinal ? outputURL : nil
+                item.workspaceURL = subdirURL
+                item.state = hasFinal ? .completed : .mapReduce
+                item.statusMessage = hasFinal ? "Готово" : "В процессе (чанки)"
+                item.progress = hasFinal ? 1.0 : 0.5
+
+                if hasChunks {
+                    loadChunks(for: &item, from: chunkDir)
+                }
+
+                if let attributes = try? FileManager.default.attributesOfItem(atPath: subdirURL.path),
+                   let modDate = attributes[.modificationDate] as? Date {
+                    item.completedAt = modDate
+                }
+
+                items.append(item)
+                if hasFinal {
+                    loadMetadata(from: outputURL, index: items.count - 1)
+                }
+                loadedCount += 1
+            }
+
+            if loadedCount > 0 {
+                toastManager?.show(message: " Загружено \(loadedCount) проектов", type: .info)
+            }
+        } catch {
+            print("[QueueManager] Failed to load existing files: \(error)")
+        }
+    }
+
+    private func loadChunks(for item: inout QueueItem, from chunkDir: URL) {
+        do {
+            let files = try FileManager.default.contentsOfDirectory(atPath: chunkDir.path)
+                .filter { $0.hasPrefix("chunk_") && $0.hasSuffix(".md") }
+                .sorted()
+
+            for (index, file) in files.enumerated() {
+                let chunk = ChunkInfo(id: index + 1, status: .done)
+                item.chunks.append(chunk)
+            }
+        } catch {
+            print("[QueueManager] Failed to load chunks: \(error)")
         }
     }
 }

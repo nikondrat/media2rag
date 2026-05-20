@@ -166,6 +166,19 @@ struct QueueItem: Identifiable, Equatable {
 enum SourceType: String, Codable {
     case pdf, epub, video, audio, image, markdown, url, telegram
 
+    var color: Color {
+        switch self {
+        case .pdf: return .red
+        case .epub: return .blue
+        case .video: return .purple
+        case .audio: return .green
+        case .image: return .pink
+        case .markdown: return .gray
+        case .url: return .teal
+        case .telegram: return .cyan
+        }
+    }
+
     static func from(source: String) -> SourceType {
         if source.hasPrefix("http") {
             if source.contains("t.me/") || source.contains("telegram.me/") {

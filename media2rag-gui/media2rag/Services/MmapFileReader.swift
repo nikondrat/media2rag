@@ -18,6 +18,7 @@ final class MmapFileReader {
     func open() throws {
         let fh = try FileHandle(forReadingFrom: url)
         let fileSize = try fh.seekToEnd()
+        _ = fileSize
         fh.seek(toFileOffset: 0)
 
         if let data = try? Data(contentsOf: url) {
@@ -33,23 +34,29 @@ final class MmapFileReader {
     func close() {
         sectionCache.removeAll()
         mappedData = nil
-        try?         try?         try?         try? fileHandle?.close()
+        try? fileHandle?.close()
         fileHandle = nil
     }
 
     func scanSections() -> [SectionIndex] {
         guard let data = mappedData, !useFallback else {
+            print("[MmapFileReader] scanSections: using fallback, useFallback=\(useFallback), mappedData=\(mappedData != nil ? "yes" : "no")")
             return scanSectionsFallback()
         }
 
+        print("[MmapFileReader] scanSections: starting, data size=\(data.count)")
         var sections: [SectionIndex] = []
         var inFrontmatter = false
         var currentOffset: Int?
         var currentLevel = 0
         var currentTitle = ""
 
-        guard let content = String(data: data, encoding: .utf8) else { return [] }
+        guard let content = String(data: data, encoding: .utf8) else {
+            print("[MmapFileReader] scanSections: failed to decode content as UTF8")
+            return []
+        }
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+        print("[MmapFileReader] scanSections: total lines=\(lines.count)")
 
         var lineOffset = 0
         for line in lines {
@@ -97,6 +104,7 @@ final class MmapFileReader {
             lineOffset += line.count + 1
         }
 
+        print("[MmapFileReader] scanSections: found \(sections.count) sections")
         if let prevOffset = currentOffset {
             let length = lineOffset - prevOffset
             if length > 0 {
@@ -107,6 +115,7 @@ final class MmapFileReader {
                     length: length,
                     level: currentLevel
                 ))
+                print("[MmapFileReader] scanSections: added final section, id=\(sections.count - 1)")
             }
         }
 
@@ -118,6 +127,7 @@ final class MmapFileReader {
         fileHandle.seek(toFileOffset: 0)
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
 
+        print("[MmapFileReader] scanSectionsFallback: starting")
         var sections: [SectionIndex] = []
         var inFrontmatter = false
         var currentOffset: Int?
@@ -172,6 +182,7 @@ final class MmapFileReader {
             lineOffset += line.count + 1
         }
 
+        print("[MmapFileReader] scanSectionsFallback: found \(sections.count) sections")
         if let prevOffset = currentOffset {
             let length = lineOffset - prevOffset
             if length > 0 {
@@ -182,6 +193,7 @@ final class MmapFileReader {
                     length: length,
                     level: currentLevel
                 ))
+                print("[MmapFileReader] scanSectionsFallback: added final section, id=\(sections.count - 1)")
             }
         }
 
@@ -189,42 +201,60 @@ final class MmapFileReader {
     }
 
     func getSectionContent(index: Int, sections: [SectionIndex]) -> String? {
-        guard index >= 0 && index < sections.count else { return nil }
+        guard index >= 0 && index < sections.count else {
+            print("[MmapFileReader] getSectionContent: index out of range, index=\(index), sections.count=\(sections.count)")
+            return nil
+        }
 
         if let cached = sectionCache[index] {
+            print("[MmapFileReader] getSectionContent: cache hit, index=\(index), cached length=\(cached.count)")
             return cached
         }
 
         let section = sections[index]
+        print("[MmapFileReader] getSectionContent: cache miss, index=\(index), offset=\(section.offset), length=\(section.length)")
 
         if useFallback || mappedData == nil {
             return getSectionContentFallback(section)
         }
 
-        guard let data = mappedData else { return nil }
+        guard let data = mappedData else {
+            print("[MmapFileReader] getSectionContent: mappedData is nil")
+            return nil
+        }
         let endOffset = min(section.offset + section.length, data.count)
-        guard section.offset < endOffset else { return nil }
+        guard section.offset < endOffset else {
+            print("[MmapFileReader] getSectionContent: invalid offset range, section.offset=\(section.offset), endOffset=\(endOffset)")
+            return nil
+        }
 
         let sectionData = data.subdata(in: section.offset..<endOffset)
         if let content = String(data: sectionData, encoding: .utf8) {
             sectionCache[index] = content
+            print("[MmapFileReader] getSectionContent: success, index=\(index), content length=\(content.count)")
             return content
         }
 
+        print("[MmapFileReader] getSectionContent: failed to decode section as UTF8")
         return nil
     }
 
     private func getSectionContentFallback(_ section: SectionIndex) -> String? {
-        guard let fileHandle = fileHandle else { return nil }
+        guard let fileHandle = fileHandle else {
+            print("[MmapFileReader] getSectionContentFallback: fileHandle is nil")
+            return nil
+        }
         do {
             try fileHandle.seek(toOffset: UInt64(section.offset))
             if let data = try fileHandle.read(upToCount: section.length) {
                 if let content = String(data: data, encoding: .utf8) {
                     sectionCache[section.id] = content
+                    print("[MmapFileReader] getSectionContentFallback: success, id=\(section.id), length=\(content.count)")
                     return content
                 }
             }
         } catch {
+            print("[MmapFileReader] getSectionContentFallback: error=\(error)")
         }
         return nil
     }

@@ -4,7 +4,7 @@ struct ContentView: View {
     @EnvironmentObject var queueManager: QueueManager
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var modelManager: ModelManager
-    @State private var selectedItemId: UUID?
+    @StateObject private var toastManager = ToastManager()
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var filterType: SourceTypeFilter = .all
@@ -28,7 +28,7 @@ struct ContentView: View {
     }
 
     var selectedItem: QueueItem? {
-        if let selId = selectedItemId, queueManager.items.contains(where: { $0.id == selId }) {
+        if let selId = queueManager.selectedItemId, queueManager.items.contains(where: { $0.id == selId }) {
             return queueManager.items.first { $0.id == selId }
         }
         if let activeId = queueManager.activeItemId {
@@ -52,6 +52,10 @@ struct ContentView: View {
         .frame(minWidth: 900, minHeight: 600)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                ModelSelectorDropdown()
+
+                Divider()
+
                 Button(action: {
                     Task { await queueManager.startProcessing() }
                 }) {
@@ -95,6 +99,22 @@ struct ContentView: View {
         }
         .onAppear {
             queueManager.setSettingsManager(settingsManager)
+            queueManager.toastManager = toastManager
+            queueManager.loadExistingFiles()
+        }
+        .overlay(alignment: .top) {
+            VStack(spacing: 6) {
+                ForEach(toastManager.toasts) { toast in
+                    ToastView(toast: toast) {
+                        withAnimation(.easeOut) {
+                            toastManager.dismiss(toast)
+                        }
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .padding(.top, 8)
+            .animation(.easeInOut, value: toastManager.toasts.count)
         }
     }
 
@@ -127,25 +147,65 @@ struct ContentView: View {
             Divider()
 
             if filteredItems.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: searchText.isEmpty ? "square.and.arrow.down" : "magnifyingglass")
-                        .font(.system(size: 28))
+                VStack(spacing: 12) {
+                    if searchText.isEmpty {
+                        Image(systemName: "square.and.arrow.down.on.square")
+                            .font(.system(size: 36))
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("Очередь пуста")
+                            .font(.title3)
+                            .fontWeight(.medium)
+                        Text("Добавьте файлы через кнопку выше или перетащите их в окно")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                        HStack(spacing: 16) {
+                            Label("PDF, EPUB", systemImage: "doc")
+                            Label("MP4, MP3", systemImage: "film")
+                            Label("MD, URL", systemImage: "link")
+                        }
+                        .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text(searchText.isEmpty ? "Нет файлов" : "Ничего не найдено")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        Button("Выбрать файлы") {
+                            showFilePicker = true
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.top, 8)
+                    } else {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 28))
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("Ничего не найдено")
+                            .font(.title3)
+                            .fontWeight(.medium)
+                        Text("Попробуйте изменить запрос или сбросить фильтр")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(filteredItems, selection: Binding<UUID?>(
-                    get: { selectedItemId },
-                    set: { selectedItemId = $0 }
-                )) { item in
-                    QueueItemRow(item: item, isSelected: item.id == selectedItemId) {
-                        queueManager.removeItem(item)
+                List(selection: Binding<UUID?>(
+                    get: { queueManager.selectedItemId },
+                    set: { queueManager.selectedItemId = $0 }
+                )) {
+                    ForEach(filteredItems) { item in
+                        QueueItemRow(
+                            item: item,
+                            isSelected: item.id == queueManager.selectedItemId,
+                            onDelete: { queueManager.removeItem(item) },
+                            onProcessThis: { queueManager.processSingle(item) },
+                            onOpenWorkspace: { queueManager.openWorkspace(for: item) },
+                            onCopyPath: { queueManager.copyPath(for: item) },
+                            onRetry: { queueManager.retryItem(item) }
+                        )
+                        .tag(item.id)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                     }
-                    .tag(item.id)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                    .onMove { source, destination in
+                        queueManager.reorder(from: source, to: destination)
+                    }
                 }
                 .listStyle(.sidebar)
             }
@@ -158,9 +218,21 @@ struct ContentView: View {
 
             Divider()
 
-            URLInputView(urlInput: $urlInput) { url in
-                queueManager.addSource(url)
-                urlInput = ""
+            HStack(spacing: 8) {
+                Button(action: { openOutputDirectory() }) {
+                    Image(systemName: "folder")
+                    Text("Output")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+                Spacer()
+
+                URLInputView(urlInput: $urlInput) { url in
+                    queueManager.addSource(url)
+                    urlInput = ""
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -227,12 +299,16 @@ struct QueueItemRow: View {
     let item: QueueItem
     let isSelected: Bool
     let onDelete: () -> Void
+    let onProcessThis: () -> Void
+    let onOpenWorkspace: () -> Void
+    let onCopyPath: () -> Void
+    let onRetry: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: item.fileIcon)
                 .font(.system(size: 16))
-                .foregroundColor(item.state.iconColor)
+                .foregroundColor(item.sourceType.color)
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -270,6 +346,23 @@ struct QueueItemRow: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+
+                    if let backend = item.backend {
+                        Text(backend == "ollama" ? "Ollama" : "OpenRouter")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(backend == "ollama" ? Color.orange.opacity(0.15) : Color.blue.opacity(0.15))
+                            .cornerRadius(4)
+                    }
+
+                    if item.model != nil {
+                        Text("\(item.model ?? "")")
+                            .font(.caption2)
+                            .italic()
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -299,6 +392,47 @@ struct QueueItemRow: View {
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+        .animation(.easeInOut(duration: 0.3), value: item.state)
+        .animation(.easeInOut(duration: 0.3), value: item.progress)
+        .contextMenu {
+            if item.state == .queued {
+                Button(action: onProcessThis) {
+                    Label("Process this", systemImage: "play")
+                }
+                Divider()
+                Button(action: onCopyPath) {
+                    Label("Copy path", systemImage: "doc.on.doc")
+                }
+                Button(action: onDelete) {
+                    Label("Remove", systemImage: "trash")
+                }
+            } else if item.state == .completed {
+                Button(action: onOpenWorkspace) {
+                    Label("Open in Finder", systemImage: "folder")
+                }
+                Button(action: onOpenWorkspace) {
+                    Label("Open workspace", systemImage: "folder.badge.gearshape")
+                }
+                Divider()
+                Button(action: onCopyPath) {
+                    Label("Copy path", systemImage: "doc.on.doc")
+                }
+                Button(action: onDelete) {
+                    Label("Remove", systemImage: "trash")
+                }
+            } else if item.state == .failed {
+                Button(action: onRetry) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                Divider()
+                Button(action: onDelete) {
+                    Label("Remove", systemImage: "trash")
+                }
+                Button(action: onCopyPath) {
+                    Label("Copy error", systemImage: "doc.on.doc")
+                }
+            }
+        }
     }
 
     private func formatWords(_ count: Int) -> String {
@@ -409,6 +543,17 @@ enum SourceTypeFilter: String, CaseIterable {
         case .url: return "URL"
         case .telegram: return "Telegram"
         case .markdown: return "MD"
+        }
+    }
+}
+
+extension ContentView {
+    private func openOutputDirectory() {
+        let workspaceURL = URL(fileURLWithPath: settingsManager.workspaceDirectory)
+        if FileManager.default.fileExists(atPath: workspaceURL.path) {
+            NSWorkspace.shared.open(workspaceURL)
+        } else {
+            toastManager.show(message: "️ Workspace директория не найдена", type: .info)
         }
     }
 }
