@@ -8,6 +8,13 @@ struct DetailView: View {
     @State private var intermediateContent = ""
     @State private var showSavePanel = false
     @State private var previewMode: PreviewMode = .formatted
+    @State private var mmapReader: MmapFileReader?
+    @State private var sections: [SectionIndex] = []
+    @State private var sectionCache: [Int: String] = [:]
+    @State private var lazySectionsLoaded = false
+    @State private var currentPage = 0
+    @State private var sectionsPerPage = 50
+    private let paginationThreshold = 200
 
     var item: QueueItem? {
         queueManager.items.first { $0.id == itemId }
@@ -55,18 +62,24 @@ struct DetailView: View {
         .onChange(of: item.state) { _, newState in
             if newState == .completed {
                 loadContent(from: item.outputURL)
-                loadIntermediate(from: item.intermediateURL)
+                loadIntermediate(from: item.workspaceURL?.appendingPathComponent("intermediate/raw.md"))
+                initMmapReader(for: item.outputURL)
             }
         }
         .onAppear {
             if item.state == .completed {
                 loadContent(from: item.outputURL)
-                loadIntermediate(from: item.intermediateURL)
+                loadIntermediate(from: item.workspaceURL?.appendingPathComponent("intermediate/raw.md"))
+                initMmapReader(for: item.outputURL)
             }
         }
+        .onDisappear {
+            mmapReader?.close()
+            mmapReader = nil
+        }
         .onChange(of: previewMode) { _, newMode in
-            if newMode == .intermediate, let url = item.intermediateURL, intermediateContent.isEmpty {
-                loadIntermediate(from: url)
+            if newMode == .intermediate, let wsURL = item.workspaceURL, intermediateContent.isEmpty {
+                loadIntermediate(from: wsURL.appendingPathComponent("intermediate/raw.md"))
             }
         }
         .fileExporter(
@@ -279,15 +292,126 @@ struct DetailView: View {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
+    private var totalPages: Int {
+        guard !sections.isEmpty else { return 0 }
+        return (sections.count + sectionsPerPage - 1) / sectionsPerPage
+    }
+
+    private var showPagination: Bool {
+        sections.count > paginationThreshold
+    }
+
+    private var paginatedSectionRange: Range<Int> {
+        let start = currentPage * sectionsPerPage
+        let end = min(start + sectionsPerPage, sections.count)
+        return start..<end
+    }
+
     private var formattedPreview: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(parseMarkdownSections(markdownContent), id: \.id) { section in
-                groupSectionView(section)
+        Group {
+            if !sections.isEmpty && lazySectionsLoaded {
+                VStack(spacing: 0) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(paginatedSectionRange), id: \.self) { index in
+                                if let content = loadSectionContent(index) {
+                                    let parsedSections = parseMarkdownSections(content)
+                                    ForEach(parsedSections, id: \.id) { section in
+                                        groupSectionView(section)
+                                    }
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+
+                    if showPagination {
+                        pageNavigation
+                    }
+                }
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(12)
+            } else if !markdownContent.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(parseMarkdownSections(markdownContent), id: \.id) { section in
+                        groupSectionView(section)
+                    }
+                }
+                .padding()
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(12)
+            } else {
+                Color.clear
             }
         }
-        .padding()
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(12)
+        .id(currentPage)
+    }
+
+    private var pageNavigation: some View {
+        HStack(spacing: 8) {
+            Button(action: { changePage(to: currentPage - 1) }) {
+                Image(systemName: "chevron.left")
+            }
+            .disabled(currentPage == 0)
+
+            ForEach(pageNumbers, id: \.self) { page in
+                Button(action: { changePage(to: page) }) {
+                    Text("\(page + 1)")
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(page == currentPage ? Color.accentColor : Color.clear)
+                        .foregroundColor(page == currentPage ? .white : .primary)
+                        .cornerRadius(4)
+                }
+            }
+
+            Button(action: { changePage(to: currentPage + 1) }) {
+                Image(systemName: "chevron.right")
+            }
+            .disabled(currentPage >= totalPages - 1)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var pageNumbers: [Int] {
+        guard totalPages > 0 else { return [] }
+        var pages: [Int] = []
+        let maxVisible = 7
+
+        if totalPages <= maxVisible {
+            pages = Array(0..<totalPages)
+        } else {
+            pages.append(0)
+            let start = max(1, currentPage - 1)
+            let end = min(totalPages - 2, currentPage + 1)
+            if start > 1 { pages.append(-1) }
+            for p in start...end { pages.append(p) }
+            if end < totalPages - 2 { pages.append(-2) }
+            pages.append(totalPages - 1)
+        }
+
+        return pages
+    }
+
+    private func changePage(to page: Int) {
+        guard page >= 0 && page < totalPages else { return }
+        currentPage = page
+    }
+
+    private func loadSectionContent(_ index: Int) -> String? {
+        if let cached = sectionCache[index] {
+            return cached
+        }
+        if let reader = mmapReader, !sections.isEmpty {
+            if let content = reader.getSectionContent(index: index, sections: sections) {
+                sectionCache[index] = content
+                return content
+            }
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -358,9 +482,10 @@ struct DetailView: View {
                         .foregroundColor(.secondary)
                     Text("Промежуточный файл не найден")
                         .font(.title3)
-                    if let url = item?.intermediateURL {
+                    if let url = item?.workspaceURL {
+                        let intermediateURL = url.appendingPathComponent("intermediate/raw.md")
                         Button("Открыть в Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                            NSWorkspace.shared.activateFileViewerSelecting([intermediateURL])
                         }
                         .buttonStyle(.bordered)
                     }
@@ -574,10 +699,35 @@ struct DetailView: View {
         }
     }
 
-    private func loadIntermediate(from url: URL?) {
-        guard let url = url else { return }
+    private func initMmapReader(for url: URL?) {
+        guard let url = url, FileManager.default.fileExists(atPath: url.path) else { return }
+        let reader = MmapFileReader(url: url)
         do {
-            intermediateContent = try String(contentsOf: url, encoding: .utf8)
+            try reader.open()
+            let scannedSections = reader.scanSections()
+            mmapReader = reader
+            sections = scannedSections
+            lazySectionsLoaded = !scannedSections.isEmpty
+        } catch {
+            mmapReader = nil
+            sections = []
+            lazySectionsLoaded = false
+        }
+    }
+
+    private func loadIntermediate(from url: URL?) {
+        guard let workspaceURL = item?.workspaceURL else {
+            guard let url = url else { return }
+            do {
+                intermediateContent = try String(contentsOf: url, encoding: .utf8)
+            } catch {
+                intermediateContent = ""
+            }
+            return
+        }
+        let intermediatePath = workspaceURL.appendingPathComponent("intermediate/raw.md")
+        do {
+            intermediateContent = try String(contentsOf: intermediatePath, encoding: .utf8)
         } catch {
             intermediateContent = ""
         }

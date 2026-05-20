@@ -102,11 +102,14 @@ class QueueManager: ObservableObject {
             return
         }
 
+        let effectiveBackend = items[index].backend ?? settings.backend
+        let effectiveModel = items[index].model ?? settings.model
+
         var args = [
             items[index].source,
-            "-o", settings.outputDirectory,
-            "--backend", settings.backend,
-            "--model", settings.model,
+            "--workspace", settings.workspaceDirectory,
+            "--backend", effectiveBackend,
+            "--model", effectiveModel,
             "--json"
         ]
 
@@ -163,19 +166,20 @@ class QueueManager: ObservableObject {
                     items[index].statusMessage = "Чанк \(current)/\(total) (пропуск, уже готов)"
                 }
             case "map_chunk":
-                if let current = event.current, let total = event.total {
-                    let mapRange = 0.6 - 0.2
-                    let pct = Double(current) / Double(total) * mapRange
-                    items[index].progress = 0.2 + pct
-                    items[index].statusMessage = "Чанк \(current) из \(total)..."
+                if let chunkId = event.current {
+                    ensureChunksArray(for: index, upTo: chunkId)
+                    items[index].chunks[chunkId - 1].status = .processing
                 }
             case "map_chunk_done":
-                if let current = event.current, let total = event.total {
-                    items[index].statusMessage = "Чанк \(current) из \(total) ✓"
+                if let chunkId = event.current {
+                    ensureChunksArray(for: index, upTo: chunkId)
+                    items[index].chunks[chunkId - 1].status = .done
                 }
             case "map_chunk_error":
-                if let current = event.current {
-                    items[index].statusMessage = "Ошибка чанка \(current): \(event.message ?? "")"
+                if let chunkId = event.current {
+                    ensureChunksArray(for: index, upTo: chunkId)
+                    items[index].chunks[chunkId - 1].status = .error
+                    items[index].chunks[chunkId - 1].errorMessage = event.message
                 }
             case "map_done":
                 items[index].statusMessage = "Все чанки обработаны, объединение..."
@@ -242,11 +246,11 @@ class QueueManager: ObservableObject {
                     items[index].statusMessage = "Готово"
                     items[index].progress = 1.0
                     items[index].completedAt = Date()
-                    if let output = event.output {
+                    if let workDir = event.workDir {
+                        items[index].workspaceURL = URL(fileURLWithPath: workDir)
+                        items[index].outputURL = URL(fileURLWithPath: workDir).appendingPathComponent("output/final.md")
+                    } else if let output = event.output {
                         items[index].outputURL = URL(fileURLWithPath: output)
-                    }
-                    if let intermediate = event.intermediateOutput {
-                        items[index].intermediateURL = URL(fileURLWithPath: intermediate)
                     }
                     totalProcessed += 1
                 }
@@ -268,6 +272,13 @@ class QueueManager: ObservableObject {
         }
     }
 
+    private func ensureChunksArray(for index: Int, upTo chunkId: Int) {
+        var chunks = items[index].chunks
+        while chunks.count < chunkId {
+            chunks.append(ChunkInfo(id: chunks.count + 1))
+        }
+        items[index].chunks = chunks
+    }
     private func parseFrontmatter(_ content: String) -> (title: String?, topics: [String]?, summary: String?, keyInsights: [String]?)? {
         guard content.hasPrefix("---") else { return nil }
 

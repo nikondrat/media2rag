@@ -1,6 +1,61 @@
 import Foundation
 import SwiftUI
 
+enum ChunkStatus: String, Codable {
+    case queued
+    case processing
+    case done
+    case error
+    case skipped
+
+    var icon: String {
+        switch self {
+        case .queued: return "circle"
+        case .processing: return "arrow.triangle.2.circlepath"
+        case .done: return "checkmark.circle.fill"
+        case .error: return "exclamationmark.circle.fill"
+        case .skipped: return "circle.slash"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .queued: return .secondary.opacity(0.4)
+        case .processing: return .blue
+        case .done: return .green
+        case .error: return .red
+        case .skipped: return .orange
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .queued: return "В очереди"
+        case .processing: return "Обработка"
+        case .done: return "Готово"
+        case .error: return "Ошибка"
+        case .skipped: return "Пропущен"
+        }
+    }
+}
+
+struct ChunkInfo: Identifiable, Codable, Equatable {
+    let id: Int
+    var status: ChunkStatus = .queued
+    var wordCount: Int?
+    var errorMessage: String?
+    var contentOffset: Int?
+    var contentLength: Int?
+}
+
+struct SectionIndex: Identifiable {
+    let id: Int
+    let title: String
+    let offset: Int
+    let length: Int
+    let level: Int
+}
+
 enum ProcessingState: String, Codable {
     case queued = "queued"
     case extracting = "extracting"
@@ -43,7 +98,7 @@ struct QueueItem: Identifiable, Equatable {
     var statusMessage: String = ""
     var outputURL: URL?
     var outputFiles: [String]?
-    var intermediateURL: URL?
+    var workspaceURL: URL?
     var errorMessage: String?
     var wordCount: Int?
     var topics: [String]?
@@ -52,6 +107,9 @@ struct QueueItem: Identifiable, Equatable {
     var title: String?
     var startedAt: Date?
     var completedAt: Date?
+    var chunks: [ChunkInfo] = []
+    var backend: String?
+    var model: String?
 
     var isTelegramChannel: Bool {
         sourceType == .telegram && (outputFiles?.count ?? 0) > 1
