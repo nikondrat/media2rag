@@ -62,14 +62,42 @@ class Transformer:
         self._client = llm_client
 
     def transform(self, compressed_text: str, existing_metadata: DocumentMetadata = None) -> tuple[str, DocumentMetadata]:
+        return self._transform_with_context(compressed_text, existing_metadata)
+
+    def transform_chunk(
+        self,
+        chunk_text: str,
+        chunk_index: int,
+        total_chunks: int,
+        shared_metadata: DocumentMetadata = None,
+    ) -> tuple[str, DocumentMetadata]:
+        context = f"This is chunk {chunk_index + 1} of {total_chunks} from a larger document."
+        if shared_metadata:
+            if shared_metadata.domains:
+                context += f" Document domains: {', '.join(shared_metadata.domains)}."
+            if shared_metadata.language:
+                context += f" Source language: {shared_metadata.language}."
+        return self._transform_with_context(chunk_text, shared_metadata, chunk_context=context)
+
+    def _transform_with_context(
+        self,
+        text: str,
+        existing_metadata: DocumentMetadata = None,
+        chunk_context: str = None,
+    ) -> tuple[str, DocumentMetadata]:
+        prompt = f"Structure this content:"
+        if chunk_context:
+            prompt = f"{chunk_context}\n\n{prompt}"
+        prompt += f"\n\n{text}"
+
         response = self._client.chat(
-            prompt=f"Structure this content:\n\n{compressed_text}",
+            prompt=prompt,
             system=self.SYSTEM_PROMPT,
         )
 
         parsed = self._parse_json_response(response)
         if not parsed:
-            return compressed_text, existing_metadata or DocumentMetadata(title="", source="", doc_type="")
+            return text, existing_metadata or DocumentMetadata(title="", source="", doc_type="")
 
         claims = []
         for c in parsed.get("claims", []):
@@ -95,7 +123,7 @@ class Transformer:
             key_insights=[c.text for c in claims if c.type in ("framework", "prediction")],
         )
 
-        structured = self._format_content(parsed.get("structured_content", compressed_text), metadata)
+        structured = self._format_content(parsed.get("structured_content", text), metadata)
         return structured, metadata
 
     def _parse_json_response(self, response: str) -> Optional[dict]:

@@ -69,9 +69,9 @@ class CLIRunner: ObservableObject {
             }
         }
 
-        // Timeout: kill process if no output for 5 minutes
+        // Timeout: kill process if no output for 30 minutes
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(300))
+            try? await Task.sleep(for: .seconds(1800))
             guard !Task.isCancelled, let self = self else { return }
 
             stderrLock.lock()
@@ -140,6 +140,12 @@ struct CLIJSONEvent: Codable, Sendable {
     let postUrl: String?
     let channel: String?
     let outputFiles: [String]?
+    let intermediateOutput: String?
+    let section: String?
+    let part: Int?
+    let pair: String?
+    let round: Int?
+    let workDir: String?
 
     enum CodingKeys: String, CodingKey {
         case eventType = "status"
@@ -151,13 +157,18 @@ struct CLIJSONEvent: Codable, Sendable {
         case postUrl = "post_url"
         case channel
         case outputFiles = "output_files"
+        case intermediateOutput = "intermediate"
+        case section, part, pair, round
+        case workDir = "work_dir"
     }
 
     init(eventType: String, file: String? = nil, fileType: String? = nil, words: Int? = nil,
          chars: Int? = nil, current: Int? = nil, total: Int? = nil, topics: [String]? = nil,
          output: String? = nil, message: String? = nil, processed: Int? = nil, errors: Int? = nil,
          totalPosts: Int? = nil, postId: String? = nil, postUrl: String? = nil, channel: String? = nil,
-         outputFiles: [String]? = nil) {
+         outputFiles: [String]? = nil, intermediateOutput: String? = nil,
+         section: String? = nil, part: Int? = nil, pair: String? = nil, round: Int? = nil,
+         workDir: String? = nil) {
         self.eventType = eventType
         self.file = file
         self.fileType = fileType
@@ -175,5 +186,11 @@ struct CLIJSONEvent: Codable, Sendable {
         self.postUrl = postUrl
         self.channel = channel
         self.outputFiles = outputFiles
+        self.intermediateOutput = intermediateOutput
+        self.section = section
+        self.part = part
+        self.pair = pair
+        self.round = round
+        self.workDir = workDir
     }
 }

@@ -106,6 +106,16 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
     else:
         emit_json("extracted", file=source_str, type=doc_type, words=word_count)
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    from domain.document import _sanitize_filename
+    safe_name = _sanitize_filename(extracted.metadata.title) or Path(source_str).stem
+    intermediate_path = output_dir / f"{safe_name}_raw.md"
+    intermediate_path.write_text(
+        f"# {extracted.metadata.title}\n\n{extracted.raw_text}",
+        encoding="utf-8",
+    )
+    intermediate_str = str(intermediate_path)
+
     if not llm_client:
         from domain.document import RAGDocument
         doc = RAGDocument(
@@ -120,7 +130,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, output_dir: P
     if not json_mode:
         print(f"✅ Saved: {output_path}")
     else:
-        emit_json("completed", file=source_str, output=str(output_path))
+        emit_json("completed", file=source_str, output=str(output_path), intermediate=intermediate_str)
     return output_path
 
 

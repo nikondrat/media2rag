@@ -148,6 +148,56 @@ class QueueManager: ObservableObject {
                     items[index].wordCount = words
                 }
                 totalProcessed += 1
+            case "large_doc_detected":
+                items[index].state = .mapReduce
+                items[index].statusMessage = "Большой документ: обработка по частям..."
+                items[index].progress = 0.2
+            case "map_start":
+                items[index].state = .mapReduce
+                if let total = event.total {
+                    items[index].statusMessage = "Разбито на \(total) чанков"
+                }
+                items[index].progress = 0.2
+            case "map_skip":
+                if let current = event.current, let total = event.total {
+                    items[index].statusMessage = "Чанк \(current)/\(total) (пропуск, уже готов)"
+                }
+            case "map_chunk":
+                if let current = event.current, let total = event.total {
+                    let mapRange = 0.6 - 0.2
+                    let pct = Double(current) / Double(total) * mapRange
+                    items[index].progress = 0.2 + pct
+                    items[index].statusMessage = "Чанк \(current) из \(total)..."
+                }
+            case "map_chunk_done":
+                if let current = event.current, let total = event.total {
+                    items[index].statusMessage = "Чанк \(current) из \(total) ✓"
+                }
+            case "map_chunk_error":
+                if let current = event.current {
+                    items[index].statusMessage = "Ошибка чанка \(current): \(event.message ?? "")"
+                }
+            case "map_done":
+                items[index].statusMessage = "Все чанки обработаны, объединение..."
+                items[index].progress = 0.6
+            case "reduce_start":
+                items[index].statusMessage = "Объединение секций..."
+                items[index].progress = 0.65
+            case "reduce_skip":
+                if let section = event.section {
+                    items[index].statusMessage = "Секция «\(section)» (пропуск, уже готова)"
+                }
+            case "merge_subsection":
+                if let section = event.section, let part = event.part, let total = event.total {
+                    items[index].statusMessage = "Секция «\(section)»: часть \(part) из \(total)"
+                }
+            case "merge_subsection_skip":
+                if let section = event.section, let part = event.part {
+                    items[index].statusMessage = "Секция «\(section)»: часть \(part) (пропуск)"
+                }
+            case "reduce_done":
+                items[index].statusMessage = "Объединение завершено"
+                items[index].progress = 0.85
             case "extracting":
                 items[index].state = .extracting
                 items[index].statusMessage = "Извлечение содержимого..."
@@ -195,6 +245,9 @@ class QueueManager: ObservableObject {
                     if let output = event.output {
                         items[index].outputURL = URL(fileURLWithPath: output)
                     }
+                    if let intermediate = event.intermediateOutput {
+                        items[index].intermediateURL = URL(fileURLWithPath: intermediate)
+                    }
                     totalProcessed += 1
                 }
             case "error":
@@ -215,33 +268,22 @@ class QueueManager: ObservableObject {
         }
     }
 
-    private func loadMetadata(from url: URL?, index: Int) {
-        guard let url = url else { return }
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            if let frontmatter = parseFrontmatter(content) {
-                items[index].topics = frontmatter.topics
-                items[index].summary = frontmatter.summary
-                items[index].keyInsights = frontmatter.keyInsights
-            }
-        } catch {
-            // Ignore metadata parsing errors
-        }
-    }
-
-    private func parseFrontmatter(_ content: String) -> (topics: [String]?, summary: String?, keyInsights: [String]?)? {
+    private func parseFrontmatter(_ content: String) -> (title: String?, topics: [String]?, summary: String?, keyInsights: [String]?)? {
         guard content.hasPrefix("---") else { return nil }
 
         let parts = content.split(separator: "---", maxSplits: 2)
         guard parts.count >= 2 else { return nil }
 
         let yamlContent = String(parts[1])
+        var title: String?
         var topics: [String]?
         var summary: String?
         var keyInsights: [String]?
 
         for line in yamlContent.split(separator: "\n") {
-            if line.hasPrefix("topics:") {
+            if line.hasPrefix("title:") {
+                title = String(line.dropFirst(6).trimmingCharacters(in: .whitespaces))
+            } else if line.hasPrefix("topics:") {
                 topics = []
             } else if line.hasPrefix("  - ") && topics != nil {
                 topics?.append(String(line.dropFirst(4)))
@@ -254,6 +296,21 @@ class QueueManager: ObservableObject {
             }
         }
 
-        return (topics: topics, summary: summary, keyInsights: keyInsights)
+        return (title: title, topics: topics, summary: summary, keyInsights: keyInsights)
+    }
+
+    private func loadMetadata(from url: URL?, index: Int) {
+        guard let url = url else { return }
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            if let frontmatter = parseFrontmatter(content) {
+                items[index].title = frontmatter.title
+                items[index].topics = frontmatter.topics
+                items[index].summary = frontmatter.summary
+                items[index].keyInsights = frontmatter.keyInsights
+            }
+        } catch {
+            // Ignore metadata parsing errors
+        }
     }
 }

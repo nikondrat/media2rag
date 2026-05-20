@@ -6,6 +6,7 @@ enum ProcessingState: String, Codable {
     case extracting = "extracting"
     case compressing = "compressing"
     case transforming = "transforming"
+    case mapReduce = "map_reduce"
     case generating = "generating"
     case completed = "completed"
     case failed = "failed"
@@ -16,6 +17,7 @@ enum ProcessingState: String, Codable {
         case .extracting: return "arrow.down.circle"
         case .compressing: return "rectangle.compress.vertical"
         case .transforming: return "text.justify"
+        case .mapReduce: return "rectangle.stack"
         case .generating: return "doc.text"
         case .completed: return "checkmark.circle"
         case .failed: return "exclamationmark.circle"
@@ -25,7 +27,7 @@ enum ProcessingState: String, Codable {
     var iconColor: Color {
         switch self {
         case .queued: return .secondary.opacity(0.4)
-        case .extracting, .compressing, .transforming, .generating: return .accentColor
+        case .extracting, .compressing, .transforming, .mapReduce, .generating: return .accentColor
         case .completed: return .green
         case .failed: return .red
         }
@@ -41,16 +43,22 @@ struct QueueItem: Identifiable, Equatable {
     var statusMessage: String = ""
     var outputURL: URL?
     var outputFiles: [String]?
+    var intermediateURL: URL?
     var errorMessage: String?
     var wordCount: Int?
     var topics: [String]?
     var keyInsights: [String]?
     var summary: String?
+    var title: String?
     var startedAt: Date?
     var completedAt: Date?
 
     var isTelegramChannel: Bool {
         sourceType == .telegram && (outputFiles?.count ?? 0) > 1
+    }
+
+    var displayTitle: String {
+        title ?? fileName
     }
 
     var fileName: String {
@@ -79,6 +87,7 @@ struct QueueItem: Identifiable, Equatable {
         case .extracting: return "Извлечение"
         case .compressing: return "Сжатие"
         case .transforming: return "Трансформация"
+        case .mapReduce: return "Обработка чанков"
         case .generating: return "Генерация"
         case .completed: return "Готово"
         case .failed: return "Ошибка"

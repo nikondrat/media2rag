@@ -5,6 +5,7 @@ struct DetailView: View {
     let itemId: UUID
     @EnvironmentObject var queueManager: QueueManager
     @State private var markdownContent = ""
+    @State private var intermediateContent = ""
     @State private var showSavePanel = false
     @State private var previewMode: PreviewMode = .formatted
 
@@ -14,6 +15,7 @@ struct DetailView: View {
 
     enum PreviewMode: String, CaseIterable {
         case formatted = "Предпросмотр"
+        case intermediate = "Промежуточный"
         case raw = "Исходник"
     }
 
@@ -53,18 +55,25 @@ struct DetailView: View {
         .onChange(of: item.state) { _, newState in
             if newState == .completed {
                 loadContent(from: item.outputURL)
+                loadIntermediate(from: item.intermediateURL)
             }
         }
         .onAppear {
             if item.state == .completed {
                 loadContent(from: item.outputURL)
+                loadIntermediate(from: item.intermediateURL)
+            }
+        }
+        .onChange(of: previewMode) { _, newMode in
+            if newMode == .intermediate, let url = item.intermediateURL, intermediateContent.isEmpty {
+                loadIntermediate(from: url)
             }
         }
         .fileExporter(
             isPresented: $showSavePanel,
             document: MarkdownDocument(content: markdownContent),
             contentType: .plainText,
-            defaultFilename: item.fileName + ".md"
+            defaultFilename: item.displayTitle + ".md"
         ) { result in
             if case .success(let url) = result {
                 try? markdownContent.write(to: url, atomically: true, encoding: .utf8)
@@ -80,14 +89,9 @@ struct DetailView: View {
                     .foregroundColor(.accentColor)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.fileName)
+                    Text(item.displayTitle)
                         .font(.title2)
                         .fontWeight(.semibold)
-
-                    Text(item.source)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
                 }
 
                 Spacer()
@@ -203,9 +207,12 @@ struct DetailView: View {
             if item.isTelegramChannel {
                 channelFilesView(for: item)
             } else if !markdownContent.isEmpty {
-                if previewMode == .formatted {
+                switch previewMode {
+                case .formatted:
                     formattedPreview
-                } else {
+                case .intermediate:
+                    intermediateMarkdownView
+                case .raw:
                     rawMarkdownView
                 }
             } else {
@@ -340,6 +347,37 @@ struct DetailView: View {
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
             .cornerRadius(12)
+    }
+
+    private var intermediateMarkdownView: some View {
+        Group {
+            if intermediateContent.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 36))
+                        .foregroundColor(.secondary)
+                    Text("Промежуточный файл не найден")
+                        .font(.title3)
+                    if let url = item?.intermediateURL {
+                        Button("Открыть в Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+            } else {
+                Text(intermediateContent)
+                    .textSelection(.enabled)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineSpacing(4)
+                    .padding()
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(12)
+            }
+        }
     }
 
     private func parseMarkdownSections(_ content: String) -> [MarkdownSection] {
@@ -536,6 +574,15 @@ struct DetailView: View {
         }
     }
 
+    private func loadIntermediate(from url: URL?) {
+        guard let url = url else { return }
+        do {
+            intermediateContent = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            intermediateContent = ""
+        }
+    }
+
     private func openInFinder() {
         guard let url = item?.outputURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -606,6 +653,7 @@ struct StateBadgeView: View {
         case .extracting: return "Извлечение"
         case .compressing: return "Сжатие"
         case .transforming: return "Трансформация"
+        case .mapReduce: return "Обработка"
         case .generating: return "Генерация"
         case .completed: return "Готово"
         case .failed: return "Ошибка"
