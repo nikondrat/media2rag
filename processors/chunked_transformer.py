@@ -25,7 +25,11 @@ class ChunkedTransformer:
         "- Maintain the source language\n"
         "- Keep ## heading structure, use only ## headings\n"
         "- If a section becomes empty after dedup, omit it\n"
-        "- Output ONLY the merged markdown content, nothing else"
+        "- Output ONLY the merged markdown content\n"
+        "- DO NOT add any introductory text, conclusions, summaries about the merging process\n"
+        "- DO NOT write phrases like 'Here is the merged text', 'Ready for use', 'Based on the provided fragments'\n"
+        "- DO NOT add any meta-commentary — start directly with the first ## heading\n"
+        "- The output must look like a final document section, not a response to a request"
     )
 
     def __init__(self, llm_client, json_mode: bool = False, work_dir: Path | None = None):
@@ -185,7 +189,8 @@ class ChunkedTransformer:
                 prompt=f"Merge and deduplicate these content blocks:\n\n{content}",
                 system=self.DEDUP_SYSTEM_PROMPT,
             )
-            return f"## {section_name}\n\n{response.strip()}"
+            cleaned = self._strip_meta_commentary(response.strip())
+            return f"## {section_name}\n\n{cleaned}"
         except Exception:
             return f"## {section_name}\n\n{content}"
 
@@ -230,6 +235,58 @@ class ChunkedTransformer:
         if section_name == "_preamble":
             return result
         return f"## {section_name}\n\n{result}"
+
+    def _strip_meta_commentary(self, text: str) -> str:
+        lines = text.split("\n")
+        filtered = []
+        skip_prefixes = (
+            "готово",
+            "вот объедин",
+            "вот merged",
+            "вот результат",
+            "here is the merged",
+            "here is the combined",
+            "here is the merged and deduplicated",
+            "ready for use",
+            "готово для использования",
+            "based on the provided",
+            "на основе предоставленных",
+            "предоставленн",
+            "удалены повторы",
+            "eliminated duplicates",
+            "preserved all",
+            "сохранены все",
+            "all key ideas",
+            "все ключевые",
+            "объединены в логичные",
+            "merged into logical",
+            "без потери",
+            "without losing",
+            "упорядочиванием",
+            "reorganized",
+            "сохранением структуры",
+            "preserving the structure",
+            "без потери ни одного",
+            "final version",
+            "финальная версия",
+            "итоговый текст",
+            "final text",
+            "merged text",
+            "объединённый текст",
+            "дедуплицированный",
+            "deduplicated",
+        )
+        for line in lines:
+            stripped = line.strip().lower()
+            if not stripped:
+                continue
+            if any(stripped.startswith(p) for p in skip_prefixes):
+                continue
+            if stripped.startswith("---") and not stripped.startswith("##"):
+                continue
+            filtered.append(line)
+
+        return "\n".join(filtered).strip()
 
     def _split_by_paragraphs(self, text: str, max_size: int) -> list[str]:
         paragraphs = text.split("\n\n")
