@@ -1,6 +1,7 @@
 import json
-import urllib.request
+import time
 import urllib.error
+import urllib.request
 from typing import Optional
 
 from config import OpenRouterConfig
@@ -12,6 +13,7 @@ class OpenRouterClient:
         self._api_key = cfg.api_key
         self._model = cfg.default_model
         self._timeout = cfg.timeout
+        self._max_retries = 3
 
     def chat(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000) -> str:
         if not self._api_key:
@@ -44,16 +46,38 @@ class OpenRouterClient:
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                content = result.get("choices", [{}])[0].get("message", {}).get("content")
-                if not content:
-                    raise ValueError(f"Empty response from OpenRouter: {result}")
-                return content.strip()
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            raise ConnectionError(f"OpenRouter API error {e.code}: {body}")
+        last_error = None
+        for attempt in range(self._max_retries):
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                    raw = resp.read().decode("utf-8")
+                    result = json.loads(raw)
+                    content = result.get("choices", [{}])[0].get("message", {}).get("content")
+                    if not content:
+                        raise ValueError(f"Empty response from OpenRouter: {result}")
+                    return content.strip()
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
+                status = e.code
+                if status == 429 and attempt < self._max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    print(f"⚠️  OpenRouter rate limited, retrying in {wait}s (attempt {attempt + 2}/{self._max_retries})")
+                    time.sleep(wait)
+                    last_error = ConnectionError(f"OpenRouter rate limited (429): {body}")
+                    continue
+                raise ConnectionError(f"OpenRouter API error {status}: {body}")
+            except urllib.error.URLError as e:
+                if attempt < self._max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    print(f"⚠️  OpenRouter connection error, retrying in {wait}s (attempt {attempt + 2}/{self._max_retries})")
+                    time.sleep(wait)
+                    last_error = ConnectionError(f"OpenRouter connection failed: {e.reason}")
+                    continue
+                raise ConnectionError(f"OpenRouter request failed after {self._max_retries} attempts: {e.reason}")
+            except json.JSONDecodeError as e:
+                raise ConnectionError(f"OpenRouter returned invalid JSON: {e}")
+
+        raise last_error or ConnectionError("OpenRouter request failed")
 
     def is_available(self) -> bool:
         return bool(self._api_key)

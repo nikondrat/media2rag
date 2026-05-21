@@ -34,9 +34,7 @@ class CTGPipeline:
 
         if is_large:
             self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="map_reduce")
-            self._chunked_transformer = ChunkedTransformer(
-                self._compressor._client, json_mode=self._json_mode, work_dir=workspace_dir
-            )
+            self._chunked_transformer._work_dir = workspace_dir
             structured, metadata = self._chunked_transformer.map_reduce(
                 extracted.raw_text, extracted.metadata, source_path=source_path
             )

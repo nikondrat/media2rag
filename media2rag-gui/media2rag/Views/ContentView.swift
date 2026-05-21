@@ -40,7 +40,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 420)
+                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
         } detail: {
             if let item = selectedItem {
                 DetailView(itemId: item.id)
@@ -49,7 +49,7 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.prominentDetail)
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 960, minHeight: 600)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 ModelSelectorDropdown()

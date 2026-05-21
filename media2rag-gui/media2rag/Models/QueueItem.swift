@@ -93,6 +93,7 @@ struct QueueItem: Identifiable, Equatable {
     let id = UUID()
     let source: String
     let sourceType: SourceType
+    var originalSource: String?
     var state: ProcessingState = .queued
     var progress: Double = 0
     var statusMessage: String = ""

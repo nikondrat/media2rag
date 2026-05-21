@@ -21,7 +21,7 @@ uv run main.py [channel_url]          # legacy: download YouTube transcripts via
 
 - `brew install ffmpeg` — required for audio/video processing
 - `brew install tesseract` — required for PDF OCR fallback
-- `ollama pull gemma4:26b` — default local model (or set `OLLAMA_CTG_MODEL`)
+- `ollama pull qwen3.5:27b` — default local model (or set `OLLAMA_CTG_MODEL`)
 - Ollama server must be running at `http://localhost:11434` for local backend
 - `OPENROUTER_API_KEY` env var for cloud backend (also accepts `OPENROUTER_API`)
 
@@ -66,3 +66,13 @@ uv run main.py [channel_url]          # legacy: download YouTube transcripts via
 - Image extraction only works with Ollama backend (requires vision model).
 - Whisper defaults to `cpu` — set `WHISPER_DEVICE` for cuda/mps.
 - If using XcodeBuildMCP, use the installed XcodeBuildMCP skill before calling XcodeBuildMCP tools.
+
+## Maintaining Project Context
+
+**`PROJECT_CONTEXT.md`** — единый источник контекста для AI-ассистентов. Обновляй после:
+- Добавления новых экстракторов/процессоров
+- Изменения архитектуры (новые модули, удаление старых)
+- Смены принципов/конвенций
+- Значимых изменений в потоке данных
+
+**Правило:** Изменил код → проверь, устарел ли `PROJECT_CONTEXT.md` → обнови секции при необходимости.

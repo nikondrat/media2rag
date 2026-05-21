@@ -1,6 +1,7 @@
 import json
 import re
 from pathlib import Path
+from unidecode import unidecode
 
 from domain.document import Claim, DocumentMetadata
 from processors.chunker import SemanticChunker
@@ -63,10 +64,11 @@ class ChunkedTransformer:
         self._chunk_file(chunk_dir, index).write_text(structured, encoding="utf-8")
 
         meta_dict = {
-            "title": meta.title,
+            "title": unidecode(meta.title) if meta.title else "",
             "author": meta.author,
             "language": meta.language,
             "domains": meta.domains,
+            "topics": meta.topics,
             "core_thesis": meta.core_thesis,
             "mental_models": meta.mental_models,
             "claims": [{"text": c.text, "type": c.type, "confidence": c.confidence} for c in meta.claims],
@@ -93,7 +95,8 @@ class ChunkedTransformer:
         if not self._meta_file(chunk_dir).exists():
             return []
         data = json.loads(self._meta_file(chunk_dir).read_text(encoding="utf-8"))
-        return [data[str(i)] for i in range(len(data)) if str(i) in data]
+        indices = sorted(int(k) for k in data.keys())
+        return [data[str(i)] for i in indices]
 
     def map_reduce(self, text: str, existing_metadata: DocumentMetadata = None, source_path: str = "") -> tuple[str, DocumentMetadata]:
         chunk_dir = self._chunk_dir(source_path)
@@ -122,8 +125,8 @@ class ChunkedTransformer:
                 self._emit("map_chunk_done", current=i + 1, total=total, chunk_id=i)
             except Exception as e:
                 self._emit("map_chunk_error", current=i + 1, error=str(e), chunk_id=i)
-                raise
-                raise
+                error_file = self._chunk_file(chunk_dir, i).with_suffix(".error")
+                error_file.write_text(str(e), encoding="utf-8")
 
         self._emit("map_done", total_chunks=total)
 
@@ -336,9 +339,13 @@ class ChunkedTransformer:
         all_key_terms = set()
         all_claims = []
 
+        all_topics = set()
+
         for meta in meta_results:
             if meta.get("domains"):
                 all_domains.update(meta["domains"])
+            if meta.get("topics"):
+                all_topics.update(meta["topics"])
             if meta.get("mental_models"):
                 all_mental_models.update(meta["mental_models"])
             if meta.get("takeaways"):
@@ -354,9 +361,10 @@ class ChunkedTransformer:
             if meta.get("author") and not merged.author:
                 merged.author = meta["author"]
             if meta.get("title") and not merged.title:
-                merged.title = meta["title"]
+                merged.title = unidecode(meta["title"])
 
         merged.domains = list(all_domains)
+        merged.topics = list(all_topics) if all_topics else list(all_domains)
         merged.mental_models = list(all_mental_models)
         merged.takeaways = self._dedup_list(all_takeaways)
         merged.key_terms = list(all_key_terms)

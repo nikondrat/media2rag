@@ -47,6 +47,28 @@ struct media2ragApp: App {
                     queueManager.clearAll()
                 }
                 .keyboardShortcut("k", modifiers: [.command, .option])
+
+                Divider()
+
+                Button("Обработать выбранный") {
+                    if let selId = queueManager.selectedItemId,
+                       let item = queueManager.items.first(where: { $0.id == selId }) {
+                        queueManager.processSingle(item)
+                    } else if let first = queueManager.items.first(where: { $0.state == .queued }) {
+                        queueManager.processSingle(first)
+                    }
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(queueManager.isProcessing || queueManager.items.isEmpty)
+
+                Button("Удалить выбранный") {
+                    if let selId = queueManager.selectedItemId,
+                       let item = queueManager.items.first(where: { $0.id == selId }) {
+                        queueManager.removeItem(item)
+                    }
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(queueManager.items.isEmpty)
             }
         }
 

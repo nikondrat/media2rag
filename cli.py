@@ -2,6 +2,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
+
+import yaml
 
 from config import AppConfig
 from clients.ollama_client import OllamaClient
@@ -73,7 +76,140 @@ def emit_json(status: str, **kwargs):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
 
 
-def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False):
+PROJECT_YAML_NAME = ".media2rag.yaml"
+
+
+def _write_project_yaml(work_dir: Path, data: dict):
+    """Write or update .media2rag.yaml in the workspace subdirectory."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    yaml_path = work_dir / PROJECT_YAML_NAME
+    existing = {}
+    if yaml_path.exists():
+        try:
+            existing = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            pass
+    existing.update(data)
+    yaml_path.write_text(yaml.dump(existing, allow_unicode=True, default_flow_style=False, sort_keys=False), encoding="utf-8")
+
+
+def _read_project_yaml(work_dir: Path) -> dict | None:
+    """Read .media2rag.yaml from the workspace subdirectory."""
+    yaml_path = work_dir / PROJECT_YAML_NAME
+    if not yaml_path.exists():
+        return None
+    try:
+        return yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+
+
+def _init_project_yaml(work_dir: Path, source: str, source_type: str, title: str, backend: str, model: str, extract_only: bool):
+    """Create initial .media2rag.yaml at processing start."""
+    _write_project_yaml(work_dir, {
+        "source": source,
+        "source_type": source_type,
+        "title": title,
+        "backend": backend,
+        "model": model,
+        "extract_only": extract_only,
+        "state": "queued",
+        "progress": 0.0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "error_message": None,
+        "word_count": None,
+        "topics": None,
+        "summary": None,
+        "key_insights": None,
+        "chunks_total": None,
+        "chunks_done": 0,
+    })
+
+
+def _update_project_yaml(work_dir: Path, **kwargs):
+    """Update specific fields in .media2rag.yaml."""
+    _write_project_yaml(work_dir, kwargs)
+
+
+def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_client, json_mode: bool = False):
+    """Resume processing from an existing workspace directory."""
+    project_data = _read_project_yaml(work_dir)
+    intermediate_path = work_dir / "intermediate" / "raw.md"
+    if not intermediate_path.exists():
+        if json_mode:
+            emit_json("error", file=str(source), message="No intermediate file found for resume")
+        else:
+            print(f"❌ No intermediate file found for resume: {intermediate_path}")
+        sys.exit(1)
+
+    raw_content = intermediate_path.read_text(encoding="utf-8")
+    title = project_data.get("title") if project_data else None
+    newline_idx = -1
+    if not title:
+        if raw_content.startswith("# "):
+            newline_idx = raw_content.find("\n")
+            title = raw_content[2:newline_idx].strip() if newline_idx > 0 else raw_content[2:]
+        else:
+            title = Path(source).stem
+            newline_idx = -1
+    raw_text = raw_content[newline_idx + 1:] if newline_idx > 0 else raw_content
+
+    _update_project_yaml(work_dir, state="extracting", progress=0.1)
+
+    from domain.document import ExtractedContent, DocumentMetadata, RAGDocument
+    original_type = (project_data or {}).get("source_type", "markdown")
+    extracted = ExtractedContent(
+        raw_text=raw_text,
+        metadata=DocumentMetadata(
+            title=title,
+            source=str(source),
+            doc_type=original_type,
+            word_count=len(raw_text.split()),
+        ),
+    )
+
+    if json_mode:
+        emit_json("extracted", file=str(source), type="markdown", words=extracted.metadata.word_count)
+
+    if not llm_client:
+        doc = RAGDocument(
+            markdown=f"# {title}\n\n{raw_text}",
+            metadata=extracted.metadata,
+        )
+    else:
+        if json_mode:
+            emit_json("map_start", total=len(list((work_dir / "chunks").glob("chunk_*.md"))), work_dir=str(work_dir))
+        pipeline = CTGPipeline(llm_client, json_mode=json_mode)
+        doc = pipeline.process(extracted, str(source), workspace_dir=work_dir)
+
+    output_path = doc.save(Path(), workspace_dir=work_dir)
+
+    _update_project_yaml(
+        work_dir,
+        state="completed",
+        progress=1.0,
+        completed_at=datetime.now(timezone.utc).isoformat(),
+        topics=doc.metadata.topics or None,
+        summary=doc.metadata.summary or None,
+        key_insights=doc.metadata.key_insights or None,
+        title=doc.metadata.title,
+    )
+
+    if not json_mode:
+        print(f"✅ Saved: {output_path}")
+    else:
+        emit_json("completed", file=str(source), output=str(output_path), intermediate=str(intermediate_path),
+                  work_dir=str(work_dir),
+                  sections=[p.stem for p in sorted((work_dir / "sections").glob("*.md"))] if (work_dir / "sections").exists() else [],
+                  images=[])
+    return output_path
+
+
+def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False, existing_work_dir: Path | None = None, extract_only: bool = False, model: str = ""):
+    if existing_work_dir and existing_work_dir.exists():
+        return _resume_processing(existing_work_dir, source, cfg, llm_client, json_mode)
+
     extractors = get_extractors(cfg, llm_client)
     extractor = find_extractor(source, extractors)
 
@@ -113,6 +249,18 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
     for subdir in ["chunks", "images", "sections", "intermediate", "output"]:
         (file_workspace / subdir).mkdir(exist_ok=True)
 
+    _init_project_yaml(
+        file_workspace,
+        source=source_str,
+        source_type=doc_type,
+        title=extracted.metadata.title,
+        backend=cfg.llm_backend,
+        model=model,
+        extract_only=extract_only,
+    )
+
+    _update_project_yaml(file_workspace, state="extracted", progress=0.2, word_count=word_count)
+
     intermediate_path = file_workspace / "intermediate" / "raw.md"
     intermediate_path.write_text(
         f"# {extracted.metadata.title}\n\n{extracted.raw_text}",
@@ -131,6 +279,18 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
         doc = pipeline.process(extracted, source_str, workspace_dir=file_workspace)
 
     output_path = doc.save(Path(), workspace_dir=file_workspace)
+
+    _update_project_yaml(
+        file_workspace,
+        state="completed",
+        progress=1.0,
+        completed_at=datetime.now(timezone.utc).isoformat(),
+        topics=doc.metadata.topics or None,
+        summary=doc.metadata.summary or None,
+        key_insights=doc.metadata.key_insights or None,
+        title=doc.metadata.title,
+    )
+
     if not json_mode:
         print(f"✅ Saved: {output_path}")
     else:
@@ -207,7 +367,7 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
     return workspace_dir
 
 
-def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False):
+def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False, extract_only: bool = False, model: str = ""):
     extractors = get_extractors(cfg, llm_client)
     files = [f for f in input_dir.rglob("*") if f.is_file()]
     processed = 0
@@ -232,7 +392,7 @@ def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir
             emit_json("batch_progress", current=i + 1, total=total, file=str(f))
 
         try:
-            process_single(f, cfg, llm_client, workspace_dir, json_mode=json_mode)
+            process_single(f, cfg, llm_client, workspace_dir, json_mode=json_mode, extract_only=extract_only, model=model)
             processed += 1
         except Exception as e:
             if json_mode:
@@ -256,6 +416,7 @@ def main():
     parser.add_argument("--extract-only", action="store_true", help="Skip CTG, save raw extraction")
     parser.add_argument("--batch", action="store_true", help="Process all files in directory")
     parser.add_argument("--json", action="store_true", help="Output progress as JSON (for GUI)")
+    parser.add_argument("--work-dir", dest="work_dir", default=None, help="Existing workspace subdirectory to resume (skip extraction)")
     args = parser.parse_args()
 
     cfg = AppConfig.from_env()
@@ -272,9 +433,10 @@ def main():
         source = Path(args.source)
 
     if args.batch or (isinstance(source, Path) and source.is_dir()):
-        process_directory(source, cfg, llm_client, workspace_dir, json_mode=args.json)
+        process_directory(source, cfg, llm_client, workspace_dir, json_mode=args.json, extract_only=args.extract_only, model=args.model or "")
     else:
-        process_single(source, cfg, llm_client, workspace_dir, json_mode=args.json)
+        existing_work_dir = Path(args.work_dir) if args.work_dir else None
+        process_single(source, cfg, llm_client, workspace_dir, json_mode=args.json, existing_work_dir=existing_work_dir, extract_only=args.extract_only, model=args.model or "")
 
 
 def _resolve_workspace(cli_arg: str | None, cfg: AppConfig) -> Path:

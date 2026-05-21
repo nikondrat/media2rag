@@ -62,7 +62,7 @@ struct DetailView: View {
             }
             .padding(24)
         }
-        .frame(minWidth: 500)
+        .frame(minWidth: 400)
         .id(itemId)
         .onChange(of: itemId) { _, newId in
             resetState()
@@ -223,13 +223,14 @@ struct DetailView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(maxWidth: 220)
+                    .frame(minWidth: 200, idealWidth: 260)
 
                     Button(action: { loadContent(from: item.outputURL) }) {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.borderless)
                     .help("Обновить")
+                    .padding(.leading, 4)
                 }
             }
 
@@ -426,18 +427,6 @@ struct DetailView: View {
             print("[DetailView] loadSectionContent: cache hit, index=\(index), length=\(cached.count)")
             return cached
         }
-        if let reader = mmapReader, !sections.isEmpty {
-            if let content = reader.getSectionContent(index: index, sections: sections) {
-                sectionCache[index] = content
-                print("[DetailView] loadSectionContent: loaded, index=\(index), length=\(content.count)")
-                return content
-            }
-            print("[DetailView] loadSectionContent: reader returned nil, index=\(index)")
-        } else {
-            print("[DetailView] loadSectionContent: no reader or sections, index=\(index), hasReader=\(mmapReader != nil), sections.count=\(sections.count)")
-        }
-        return nil
-    
         if let reader = mmapReader, !sections.isEmpty {
             if let content = reader.getSectionContent(index: index, sections: sections) {
                 sectionCache[index] = content
@@ -675,6 +664,15 @@ struct DetailView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
+
+                Button(action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(error, forType: .string)
+                }) {
+                    Label("Копировать ошибку", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
         .frame(maxWidth: .infinity)

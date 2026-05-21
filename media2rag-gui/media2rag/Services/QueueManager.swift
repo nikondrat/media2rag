@@ -108,13 +108,25 @@ class QueueManager: ObservableObject {
         let effectiveBackend = items[index].backend ?? settings.backend
         let effectiveModel = items[index].model ?? settings.model
 
+        let sourceForCLI: String
+        if let originalSource = items[index].originalSource, !originalSource.isEmpty {
+            sourceForCLI = originalSource
+        } else {
+            sourceForCLI = items[index].source
+        }
+
         var args = [
-            items[index].source,
+            sourceForCLI,
             "--workspace", settings.workspaceDirectory,
             "--backend", effectiveBackend,
             "--model", effectiveModel,
             "--json"
         ]
+
+        if let workspaceURL = items[index].workspaceURL {
+            args.append("--work-dir")
+            args.append(workspaceURL.path)
+        }
 
         if settings.extractOnly {
             args.append("--extract-only")
@@ -300,7 +312,13 @@ class QueueManager: ObservableObject {
 
         for line in yamlContent.split(separator: "\n") {
             if line.hasPrefix("title:") {
-                title = String(line.dropFirst(6).trimmingCharacters(in: .whitespaces))
+                var raw = String(line.dropFirst(6).trimmingCharacters(in: .whitespaces))
+                if raw.hasPrefix("\"") && raw.hasSuffix("\"") {
+                    raw = String(raw.dropFirst().dropLast())
+                } else if raw.hasPrefix("'") && raw.hasSuffix("'") {
+                    raw = String(raw.dropFirst().dropLast())
+                }
+                title = raw
             } else if line.hasPrefix("topics:") {
                 topics = []
             } else if line.hasPrefix("  - ") && topics != nil {
@@ -390,39 +408,15 @@ class QueueManager: ObservableObject {
 
             for subdir in subdirs {
                 let subdirURL = workspaceURL.appendingPathComponent(subdir)
-                let outputURL = subdirURL.appendingPathComponent("output/final.md")
-                let hasFinal = FileManager.default.fileExists(atPath: outputURL.path)
-                
-                let chunkDir = subdirURL.appendingPathComponent(subdir)
-                let hasChunks = FileManager.default.fileExists(atPath: chunkDir.path)
-                
-                guard hasFinal || hasChunks else { continue }
+                let yamlPath = subdirURL.appendingPathComponent(".media2rag.yaml")
 
-                let sourcePath = hasFinal ? outputURL.path : chunkDir.path
-                var item = QueueItem(
-                    source: sourcePath,
-                    sourceType: .markdown
-                )
-                item.outputURL = hasFinal ? outputURL : nil
-                item.workspaceURL = subdirURL
-                item.state = hasFinal ? .completed : .mapReduce
-                item.statusMessage = hasFinal ? "Готово" : "В процессе (чанки)"
-                item.progress = hasFinal ? 1.0 : 0.5
-
-                if hasChunks {
-                    loadChunks(for: &item, from: chunkDir)
+                if FileManager.default.fileExists(atPath: yamlPath.path),
+                   let yamlContent = try? String(contentsOf: yamlPath, encoding: .utf8),
+                   let projectDict = parseSimpleYAML(yamlContent) {
+                    loadFromYAML(subdirURL, subdir, projectDict, &loadedCount)
+                } else {
+                    loadFromDirectory(subdirURL, subdir, &loadedCount)
                 }
-
-                if let attributes = try? FileManager.default.attributesOfItem(atPath: subdirURL.path),
-                   let modDate = attributes[.modificationDate] as? Date {
-                    item.completedAt = modDate
-                }
-
-                items.append(item)
-                if hasFinal {
-                    loadMetadata(from: outputURL, index: items.count - 1)
-                }
-                loadedCount += 1
             }
 
             if loadedCount > 0 {
@@ -433,13 +427,149 @@ class QueueManager: ObservableObject {
         }
     }
 
+    private func parseSimpleYAML(_ content: String) -> [String: Any]? {
+        var result: [String: Any] = [:]
+        var currentKey: String?
+        var currentArray: [String] = []
+
+        func flushArray() {
+            if let key = currentKey, !currentArray.isEmpty {
+                result[key] = currentArray
+                currentArray = []
+            }
+        }
+
+        for line in content.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+            if trimmed.hasPrefix("- ") {
+                if currentKey != nil {
+                    let value = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                    let cleanValue = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                    currentArray.append(cleanValue)
+                }
+                continue
+            }
+
+            flushArray()
+            currentKey = nil
+
+            guard let colonIdx = trimmed.firstIndex(of: ":") else { continue }
+            let key = String(trimmed[..<colonIdx]).trimmingCharacters(in: .whitespaces)
+            let valueStr = String(trimmed[trimmed.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
+
+            if valueStr.isEmpty || valueStr == "null" || valueStr == "~" {
+                currentKey = key
+                if valueStr == "null" || valueStr == "~" {
+                    result[key] = nil
+                    currentKey = nil
+                }
+            } else {
+                let cleanValue = valueStr.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if let intVal = Int(cleanValue) {
+                    result[key] = intVal
+                } else if let doubleVal = Double(cleanValue) {
+                    result[key] = doubleVal
+                } else if cleanValue == "true" {
+                    result[key] = true
+                } else if cleanValue == "false" {
+                    result[key] = false
+                } else {
+                    result[key] = cleanValue
+                }
+            }
+        }
+
+        flushArray()
+        return result.isEmpty ? nil : result
+    }
+
+    private func loadFromYAML(_ subdirURL: URL, _ subdir: String, _ projectDict: [String: Any], _ loadedCount: inout Int) {
+        var item = QueueItem(
+            source: projectDict["source"] as? String ?? subdir,
+            sourceType: SourceType(rawValue: projectDict["source_type"] as? String ?? "markdown") ?? .markdown
+        )
+        item.originalSource = subdir
+        item.title = projectDict["title"] as? String
+        item.backend = projectDict["backend"] as? String
+        item.model = projectDict["model"] as? String
+        item.summary = projectDict["summary"] as? String
+        item.topics = projectDict["topics"] as? [String]
+        item.keyInsights = projectDict["key_insights"] as? [String]
+        item.wordCount = projectDict["word_count"] as? Int
+
+        let stateStr = projectDict["state"] as? String ?? "queued"
+        item.state = ProcessingState(rawValue: stateStr) ?? .queued
+        item.progress = projectDict["progress"] as? Double ?? 0
+        item.statusMessage = item.state == .completed ? "Готово" : "Не завершено — готов к обработке"
+
+        if item.state == .completed {
+            item.outputURL = subdirURL.appendingPathComponent("output/final.md")
+        }
+        item.workspaceURL = subdirURL
+
+        if let startedStr = projectDict["started_at"] as? String {
+            let formatter = ISO8601DateFormatter()
+            item.startedAt = formatter.date(from: startedStr)
+        }
+        if let completedStr = projectDict["completed_at"] as? String {
+            let formatter = ISO8601DateFormatter()
+            item.completedAt = formatter.date(from: completedStr)
+        }
+
+        let chunkDir = subdirURL.appendingPathComponent(subdir)
+        if FileManager.default.fileExists(atPath: chunkDir.path) {
+            loadChunks(for: &item, from: chunkDir)
+        }
+
+        items.append(item)
+        loadedCount += 1
+    }
+
+    private func loadFromDirectory(_ subdirURL: URL, _ subdir: String, _ loadedCount: inout Int) {
+        let outputURL = subdirURL.appendingPathComponent("output/final.md")
+        let hasFinal = FileManager.default.fileExists(atPath: outputURL.path)
+        let chunkDir = subdirURL.appendingPathComponent(subdir)
+        let hasChunks = FileManager.default.fileExists(atPath: chunkDir.path)
+
+        guard hasFinal || hasChunks else { return }
+
+        let sourcePath = hasFinal ? outputURL.path : chunkDir.path
+        var item = QueueItem(
+            source: sourcePath,
+            sourceType: .markdown
+        )
+        item.originalSource = subdir
+        item.outputURL = hasFinal ? outputURL : nil
+        item.workspaceURL = subdirURL
+        item.state = hasFinal ? .completed : .queued
+        item.statusMessage = hasFinal ? "Готово" : "Не завершено — готов к обработке"
+        item.progress = hasFinal ? 1.0 : 0
+
+        if hasChunks {
+            loadChunks(for: &item, from: chunkDir)
+        }
+
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: subdirURL.path),
+           let modDate = attributes[.modificationDate] as? Date {
+            item.completedAt = modDate
+        }
+
+        items.append(item)
+        if hasFinal {
+            loadMetadata(from: outputURL, index: items.count - 1)
+        }
+        loadedCount += 1
+    }
+
     private func loadChunks(for item: inout QueueItem, from chunkDir: URL) {
         do {
             let files = try FileManager.default.contentsOfDirectory(atPath: chunkDir.path)
                 .filter { $0.hasPrefix("chunk_") && $0.hasSuffix(".md") }
                 .sorted()
 
-            for (index, file) in files.enumerated() {
+            for (index, _) in files.enumerated() {
                 let chunk = ChunkInfo(id: index + 1, status: .done)
                 item.chunks.append(chunk)
             }

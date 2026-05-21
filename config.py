@@ -10,8 +10,8 @@ load_dotenv()
 @dataclass
 class OllamaConfig:
     base_url: str = "http://localhost:11434"
-    ctg_model: str = "gemma4:26b"
-    vision_model: str = "gemma4:latest"
+    ctg_model: str = "qwen3.5:27b"
+    vision_model: str = "qwen3.5:27b"
     timeout: int = 300
 
 
@@ -53,8 +53,8 @@ class AppConfig:
         return cls(
             ollama=OllamaConfig(
                 base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                ctg_model=os.getenv("OLLAMA_CTG_MODEL", "gemma4:26b"),
-                vision_model=os.getenv("OLLAMA_VISION_MODEL", "gemma4:latest"),
+                ctg_model=os.getenv("OLLAMA_CTG_MODEL", "qwen3.5:27b"),
+                vision_model=os.getenv("OLLAMA_VISION_MODEL", "qwen3.5:27b"),
             ),
             openrouter=OpenRouterConfig(
                 api_key=os.getenv(

@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Optional
+from unidecode import unidecode
 
 from domain.document import Claim, DocumentMetadata
 
@@ -107,11 +108,16 @@ class Transformer:
                 confidence=c.get("confidence", "strong"),
             ))
 
+        domains = parsed.get("domains", [])
+        title = parsed.get("title", existing_metadata.title if existing_metadata else "")
+        if title:
+            title = unidecode(title)
         metadata = DocumentMetadata(
-            title=parsed.get("title", existing_metadata.title if existing_metadata else ""),
+            title=title,
             author=parsed.get("author", existing_metadata.author if existing_metadata else "Unknown"),
             language=parsed.get("language", ""),
-            domains=parsed.get("domains", []),
+            domains=domains,
+            topics=domains,
             core_thesis=parsed.get("core_thesis", ""),
             mental_models=parsed.get("mental_models", []),
             claims=claims,

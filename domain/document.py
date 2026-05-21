@@ -61,7 +61,9 @@ class RAGDocument:
 
 def _sanitize_filename(title: str) -> str:
     import re
-    s = title.strip().replace("/", " ").replace("\\", " ").replace(":", " -")
+    from unidecode import unidecode
+    s = unidecode(title.strip())
+    s = s.replace("/", " ").replace("\\", " ").replace(":", " -")
     s = re.sub(r'[<>"|?*]', "", s)
     s = re.sub(r"\s+", " ", s)
     return s[:120].rstrip(" .")
