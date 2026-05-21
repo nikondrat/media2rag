@@ -65,7 +65,6 @@ uv run main.py [channel_url]          # legacy: download YouTube transcripts via
 - `.env` is gitignored but committed in this repo — contains real API key. Do not expose.
 - Image extraction only works with Ollama backend (requires vision model).
 - Whisper defaults to `cpu` — set `WHISPER_DEVICE` for cuda/mps.
-- If using XcodeBuildMCP, use the installed XcodeBuildMCP skill before calling XcodeBuildMCP tools.
 
 ## Maintaining Project Context
 

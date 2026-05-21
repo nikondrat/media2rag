@@ -91,16 +91,14 @@ workspace/
     output/            # final.md
 ```
 
-## Расширения (Swift)
-
-В проекте также есть 17 Swift-файлов — это отдельный iOS/macOS компонент (XcodeBuildMCP интеграция). Не связан напрямую с media2rag pipeline.
-
 ---
 
 *Последнее обновление: 2026-05-21*
 *Для актуализации: после значимых изменений в архитектуре обновляй этот файл*
 
 ## Changelog
+
+- **2026-05-21**: GUI вынесен в отдельный репозиторий (`~/dev/tools/media2rag-gui`)
 
 - **2026-05-21**: OpenRouterClient — ретрай с exponential backoff (3 попытки), обработка 429/URLError/JSONDecodeError
 - **2026-05-21**: `cli.py:_resume_processing` — исправлен `UnboundLocalError` с `newline_idx`
