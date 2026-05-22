@@ -23,6 +23,24 @@ class Compressor:
             obj = {"status": status, **kwargs}
             print(json.dumps(obj, ensure_ascii=False), flush=True)
 
+    def _chat_with_streaming(self, prompt: str, system: str = "") -> str:
+        """Call LLM with streaming and emit tokens as events."""
+        result_parts = []
+        token_count = 0
+        batch_size = 20
+
+        try:
+            for token in self._client.chat_stream(prompt=prompt, system=system):
+                result_parts.append(token)
+                token_count += 1
+                if token_count % batch_size == 0:
+                    self._emit("llm_token", tokens="".join(result_parts[-batch_size:]))
+        except Exception:
+            if not result_parts:
+                result_parts.append(self._client.chat(prompt=prompt, system=system))
+
+        return "".join(result_parts)
+
     def compress(self, raw_text: str, max_input_tokens: int = 8000) -> str:
         if len(raw_text) < 500:
             return raw_text
@@ -30,7 +48,7 @@ class Compressor:
         chunks = self._split_into_chunks(raw_text, max_input_tokens)
         if len(chunks) == 1:
             self._emit("compressing_chunk", current=1, total=1)
-            result = self._client.chat(
+            result = self._chat_with_streaming(
                 prompt=f"Clean up this raw transcript:\n\n{chunks[0]}",
                 system=self.SYSTEM_PROMPT,
             )
@@ -41,7 +59,7 @@ class Compressor:
         total = len(chunks)
         for i, chunk in enumerate(chunks, 1):
             self._emit("compressing_chunk", current=i, total=total)
-            result = self._client.chat(
+            result = self._chat_with_streaming(
                 prompt=f"Clean up this raw transcript:\n\n{chunk}",
                 system=self.SYSTEM_PROMPT,
             )

@@ -8,8 +8,6 @@ from processors.transformer import Transformer
 from processors.chunked_transformer import ChunkedTransformer
 from processors.generator import Generator
 
-LARGE_DOC_THRESHOLD = 50000  # chars
-
 
 class CTGPipeline:
     """Compression → Transformation → Generation pipeline."""
@@ -30,22 +28,10 @@ class CTGPipeline:
         if not extracted.raw_text.strip():
             raise ValueError("No content to process")
 
-        is_large = len(extracted.raw_text) > LARGE_DOC_THRESHOLD
-
-        if is_large:
-            self._emit("large_doc_detected", chars=len(extracted.raw_text), mode="map_reduce")
-            self._chunked_transformer._work_dir = workspace_dir
-            structured, metadata = self._chunked_transformer.map_reduce(
-                extracted.raw_text, extracted.metadata, source_path=source_path
-            )
-        else:
-            self._emit("compression_start", chars=len(extracted.raw_text))
-            compressed = self._compressor.compress(extracted.raw_text)
-            compressed = Compressor.clean_artifacts(compressed)
-            self._emit("compression_done", chars=len(compressed))
-
-            self._emit("transformation_start")
-            structured, metadata = self._transformer.transform(compressed, extracted.metadata)
+        self._chunked_transformer._work_dir = workspace_dir
+        structured, metadata = self._chunked_transformer.map_reduce(
+            extracted.raw_text, extracted.metadata, source_path=source_path
+        )
 
         metadata.source = extracted.metadata.source or metadata.source
         metadata.doc_type = extracted.metadata.doc_type or metadata.doc_type

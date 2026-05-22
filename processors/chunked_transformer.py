@@ -3,9 +3,12 @@ import re
 from pathlib import Path
 from unidecode import unidecode
 
+import yaml
+
 from domain.document import Claim, DocumentMetadata
 from processors.chunker import SemanticChunker
 from processors.transformer import Transformer
+from processors.output_parser import MarkdownOutputParser
 
 
 class ChunkedTransformer:
@@ -34,27 +37,44 @@ class ChunkedTransformer:
     )
 
     def __init__(self, llm_client, json_mode: bool = False, work_dir: Path | None = None):
-        self._transformer = Transformer(llm_client)
+        self._transformer = Transformer(llm_client, json_mode=json_mode)
         self._chunker = SemanticChunker()
         self._client = llm_client
         self._json_mode = json_mode
         self._work_dir = work_dir
+        self._parser = MarkdownOutputParser()
 
     def _emit(self, status: str, **kwargs):
         if self._json_mode:
             obj = {"status": status, **kwargs}
             print(json.dumps(obj, ensure_ascii=False), flush=True)
 
+    def _chat_with_streaming(self, prompt: str, system: str = "") -> str:
+        """Call LLM with streaming and emit tokens as events."""
+        result_parts = []
+        token_count = 0
+        batch_size = 20
+
+        try:
+            for token in self._client.chat_stream(prompt=prompt, system=system):
+                result_parts.append(token)
+                token_count += 1
+                if token_count % batch_size == 0:
+                    self._emit("llm_token", tokens="".join(result_parts[-batch_size:]))
+        except Exception:
+            if not result_parts:
+                result_parts.append(self._client.chat(prompt=prompt, system=system))
+
+        return "".join(result_parts)
+
     def _chunk_dir(self, source_path: str) -> Path:
-        base = self._work_dir or Path(".chunks")
-        name = Path(source_path).stem if source_path else "unknown"
-        return base / name
+        return (self._work_dir / "chunks") if self._work_dir else Path("chunks")
 
     def _chunk_file(self, chunk_dir: Path, index: int) -> Path:
         return chunk_dir / f"chunk_{index:03d}.md"
 
     def _meta_file(self, chunk_dir: Path) -> Path:
-        return chunk_dir / "metadata.json"
+        return chunk_dir / "metadata.yaml"
 
     def _is_processed(self, chunk_dir: Path, index: int) -> bool:
         return self._chunk_file(chunk_dir, index).exists()
@@ -79,9 +99,9 @@ class ChunkedTransformer:
         }
         existing = {}
         if self._meta_file(chunk_dir).exists():
-            existing = json.loads(self._meta_file(chunk_dir).read_text(encoding="utf-8"))
+            existing = yaml.safe_load(self._meta_file(chunk_dir).read_text(encoding="utf-8")) or {}
         existing[str(index)] = meta_dict
-        self._meta_file(chunk_dir).write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._meta_file(chunk_dir).write_text(yaml.dump(existing, allow_unicode=True, default_flow_style=False), encoding="utf-8")
 
     def _load_all_chunks(self, chunk_dir: Path, total: int) -> list[tuple[str, dict]]:
         results = []
@@ -94,7 +114,7 @@ class ChunkedTransformer:
     def _load_all_metadata(self, chunk_dir: Path) -> list[dict]:
         if not self._meta_file(chunk_dir).exists():
             return []
-        data = json.loads(self._meta_file(chunk_dir).read_text(encoding="utf-8"))
+        data = yaml.safe_load(self._meta_file(chunk_dir).read_text(encoding="utf-8")) or {}
         indices = sorted(int(k) for k in data.keys())
         return [data[str(i)] for i in indices]
 
@@ -208,7 +228,7 @@ class ChunkedTransformer:
         if len(content) < 500:
             return f"## {section_name}\n\n{content}"
         try:
-            response = self._client.chat(
+            response = self._chat_with_streaming(
                 prompt=f"Merge and deduplicate these content blocks:\n\n{content}",
                 system=self.DEDUP_SYSTEM_PROMPT,
             )
@@ -230,7 +250,7 @@ class ChunkedTransformer:
 
             self._emit("merge_subsection", section=section_name, part=i + 1, total=len(chunks))
             try:
-                response = self._client.chat(
+                response = self._chat_with_streaming(
                     prompt=f"Merge and deduplicate these content blocks:\n\n{chunk}",
                     system=self.DEDUP_SYSTEM_PROMPT,
                 )
@@ -245,7 +265,7 @@ class ChunkedTransformer:
             combined = "\n\n".join(merged_parts)
             if len(combined) <= threshold:
                 try:
-                    response = self._client.chat(
+                    response = self._chat_with_streaming(
                         prompt=f"Merge these subsections into one:\n\n{combined}",
                         system=self.DEDUP_SYSTEM_PROMPT,
                     )
@@ -349,7 +369,8 @@ class ChunkedTransformer:
             if meta.get("mental_models"):
                 all_mental_models.update(meta["mental_models"])
             if meta.get("takeaways"):
-                all_takeaways.extend(meta["takeaways"])
+                for tw in meta["takeaways"]:
+                    all_takeaways.append(tw.get("text", tw) if isinstance(tw, dict) else tw)
             if meta.get("key_terms"):
                 all_key_terms.update(meta["key_terms"])
             if meta.get("claims"):
@@ -397,10 +418,14 @@ class ChunkedTransformer:
         seen = set()
         result = []
         for item in items:
-            normalized = item.strip().lower()
+            if isinstance(item, dict):
+                text = item.get("text", item.get("takeaway", str(item)))
+            else:
+                text = str(item)
+            normalized = text.strip().lower()
             if normalized not in seen:
                 seen.add(normalized)
-                result.append(item)
+                result.append(text)
         return result
 
     def _dedup_claims(self, claims: list[Claim]) -> list[Claim]:

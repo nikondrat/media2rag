@@ -2,7 +2,7 @@ import json
 import time
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import Optional, Generator
 
 from config import OpenRouterConfig
 
@@ -15,7 +15,7 @@ class OpenRouterClient:
         self._timeout = cfg.timeout
         self._max_retries = 3
 
-    def chat(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000) -> str:
+    def chat(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000, stream: bool = False) -> str:
         if not self._api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
 
@@ -28,7 +28,51 @@ class OpenRouterClient:
         payload = {
             "model": model_name,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
+            "max_tokens": max_tokens,
+        }
+
+        print(f"[LLM] Calling {model_name} via OpenRouter (stream={stream}), prompt length: {len(prompt)} chars", flush=True)
+
+        url = f"{self._base_url}/chat/completions"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._api_key}",
+                "HTTP-Referer": "https://github.com/nikondrat/media2rag",
+                "X-Title": "media2rag",
+            },
+            method="POST",
+        )
+
+        if stream:
+            full_response = []
+            for token in self._stream_request(req):
+                full_response.append(token)
+            result = "".join(full_response)
+            print(f"[LLM] Response received: {len(result)} chars", flush=True)
+            return result
+        else:
+            return self._request(req)
+
+    def chat_stream(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000) -> Generator[str, None, None]:
+        """Yield tokens as they arrive from the model."""
+        if not self._api_key:
+            raise ValueError("OPENROUTER_API_KEY is not set")
+
+        model_name = model or self._model
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": True,
             "max_tokens": max_tokens,
         }
 
@@ -45,6 +89,8 @@ class OpenRouterClient:
             },
             method="POST",
         )
+
+        return self._stream_request(req)
 
         last_error = None
         for attempt in range(self._max_retries):
@@ -78,6 +124,46 @@ class OpenRouterClient:
                 raise ConnectionError(f"OpenRouter returned invalid JSON: {e}")
 
         raise last_error or ConnectionError("OpenRouter request failed")
+
+    def _stream_request(self, req: urllib.request.Request) -> Generator[str, None, None]:
+        """Stream tokens from OpenRouter SSE response."""
+        last_error = None
+        for attempt in range(self._max_retries):
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                    for line in resp:
+                        line_str = line.decode("utf-8").strip()
+                        if line_str.startswith("data: "):
+                            data_str = line_str[6:]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                token = delta.get("content", "")
+                                if token:
+                                    yield token
+                            except json.JSONDecodeError:
+                                continue
+                    return
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
+                status = e.code
+                if status == 429 and attempt < self._max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    time.sleep(wait)
+                    last_error = ConnectionError(f"OpenRouter rate limited (429): {body}")
+                    continue
+                raise ConnectionError(f"OpenRouter API error {status}: {body}")
+            except urllib.error.URLError as e:
+                if attempt < self._max_retries - 1:
+                    wait = 2 ** (attempt + 1)
+                    time.sleep(wait)
+                    last_error = ConnectionError(f"OpenRouter connection failed: {e.reason}")
+                    continue
+                raise ConnectionError(f"OpenRouter stream request failed: {e.reason}")
+
+        raise last_error or ConnectionError("OpenRouter stream request failed")
 
     def is_available(self) -> bool:
         return bool(self._api_key)
