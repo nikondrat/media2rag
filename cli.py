@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ import yaml
 from config import AppConfig
 from clients.ollama_client import OllamaClient
 from clients.openrouter_client import OpenRouterClient
+from clients.protocol import LLMClient
 from domain.document import ExtractedContent, DocumentMetadata
 from extractors.base import BaseExtractor
 from extractors.pdf_epub_extractor import PdfEpubExtractor
@@ -21,7 +23,7 @@ from extractors.telegram_extractor import TelegramExtractor
 from processors.ctg_pipeline import CTGPipeline
 
 
-def get_llm_client(cfg: AppConfig, model: str = ""):
+def get_llm_client(cfg: AppConfig, model: str = "") -> LLMClient | None:
     if cfg.llm_backend == "openrouter" and cfg.openrouter.api_key:
         client = OpenRouterClient(cfg.openrouter)
         if client.is_available():
@@ -49,7 +51,7 @@ def get_llm_client(cfg: AppConfig, model: str = ""):
     return None
 
 
-def get_extractors(cfg: AppConfig, llm_client) -> list[BaseExtractor]:
+def get_extractors(cfg: AppConfig, llm_client: LLMClient | None) -> list[BaseExtractor]:
     extractors = [
         TelegramExtractor(llm_client=llm_client),
         URLExtractor(),
@@ -58,9 +60,8 @@ def get_extractors(cfg: AppConfig, llm_client) -> list[BaseExtractor]:
         VideoExtractor(cfg.whisper),
         AudioExtractor(cfg.whisper),
     ]
-    if llm_client:
-        if isinstance(llm_client, OllamaClient):
-            extractors.append(ImageExtractor(llm_client))
+    if llm_client and hasattr(llm_client, "chat_with_image"):
+        extractors.append(ImageExtractor(llm_client))
     return extractors
 
 
@@ -132,7 +133,7 @@ def _update_project_yaml(work_dir: Path, **kwargs):
     _write_project_yaml(work_dir, kwargs)
 
 
-def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_client, json_mode: bool = False):
+def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_client, json_mode: bool = False, reasoning: bool = False):
     """Resume processing from an existing workspace directory."""
     project_data = _read_project_yaml(work_dir)
     intermediate_path = work_dir / "intermediate" / "raw.md"
@@ -178,9 +179,7 @@ def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_c
             metadata=extracted.metadata,
         )
     else:
-        if json_mode:
-            emit_json("map_start", total=len(list((work_dir / "chunks").glob("chunk_*.md"))), work_dir=str(work_dir))
-        pipeline = CTGPipeline(llm_client, json_mode=json_mode)
+        pipeline = CTGPipeline(llm_client, json_mode=json_mode, reasoning=reasoning)
         doc = pipeline.process(extracted, str(source), workspace_dir=work_dir)
 
     output_path = doc.save(Path(), workspace_dir=work_dir)
@@ -206,9 +205,14 @@ def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_c
     return output_path
 
 
-def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False, existing_work_dir: Path | None = None, extract_only: bool = False, model: str = ""):
+def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False, existing_work_dir: Path | None = None, extract_only: bool = False, model: str = "", reasoning: bool = False, force: bool = False):
     if existing_work_dir and existing_work_dir.exists():
-        return _resume_processing(existing_work_dir, source, cfg, llm_client, json_mode)
+        if force:
+            if json_mode:
+                emit_json("force_clear", work_dir=str(existing_work_dir))
+            shutil.rmtree(existing_work_dir)
+        else:
+            return _resume_processing(existing_work_dir, source, cfg, llm_client, json_mode, reasoning=reasoning)
 
     extractors = get_extractors(cfg, llm_client)
     extractor = find_extractor(source, extractors)
@@ -224,7 +228,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
     if isinstance(extractor, TelegramExtractor) and isinstance(source, str):
         channel, post_id = extractor._parse_telegram_url(source)
         if channel and not post_id:
-            return _process_telegram_channel(extractor, channel, source, cfg, llm_client, workspace_dir, json_mode)
+            return _process_telegram_channel(extractor, channel, source, cfg, llm_client, workspace_dir, json_mode, reasoning=reasoning)
 
     source_str = str(source)
     if not json_mode:
@@ -275,7 +279,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
             metadata=extracted.metadata,
         )
     else:
-        pipeline = CTGPipeline(llm_client, json_mode=json_mode)
+        pipeline = CTGPipeline(llm_client, json_mode=json_mode, reasoning=reasoning)
         doc = pipeline.process(extracted, source_str, workspace_dir=file_workspace)
 
     output_path = doc.save(Path(), workspace_dir=file_workspace)
@@ -301,7 +305,7 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
     return output_path
 
 
-def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client, workspace_dir, json_mode):
+def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client, workspace_dir, json_mode, reasoning: bool = False):
     """Process Telegram channel: scrape all posts, filter, process each through pipeline."""
     if not json_mode:
         print(f"📡 Scraping channel: {channel}")
@@ -347,7 +351,7 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
                 metadata=extracted.metadata,
             )
         else:
-            pipeline = CTGPipeline(llm_client, json_mode=json_mode)
+            pipeline = CTGPipeline(llm_client, json_mode=json_mode, reasoning=reasoning)
             doc = pipeline.process(extracted, post_url, workspace_dir=workspace_dir)
 
         output_path = doc.save(Path(), workspace_dir=workspace_dir)
@@ -367,7 +371,7 @@ def _process_telegram_channel(extractor, channel: str, url: str, cfg, llm_client
     return workspace_dir
 
 
-def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False, extract_only: bool = False, model: str = ""):
+def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir: Path, json_mode: bool = False, extract_only: bool = False, model: str = "", reasoning: bool = False, force: bool = False):
     extractors = get_extractors(cfg, llm_client)
     files = [f for f in input_dir.rglob("*") if f.is_file()]
     processed = 0
@@ -392,7 +396,7 @@ def process_directory(input_dir: Path, cfg: AppConfig, llm_client, workspace_dir
             emit_json("batch_progress", current=i + 1, total=total, file=str(f))
 
         try:
-            process_single(f, cfg, llm_client, workspace_dir, json_mode=json_mode, extract_only=extract_only, model=model)
+            process_single(f, cfg, llm_client, workspace_dir, json_mode=json_mode, extract_only=extract_only, model=model, reasoning=reasoning, force=force)
             processed += 1
         except Exception as e:
             if json_mode:
@@ -414,9 +418,11 @@ def main():
     parser.add_argument("--backend", choices=["ollama", "openrouter"], help="LLM backend")
     parser.add_argument("--model", help="LLM model name (overrides default)")
     parser.add_argument("--extract-only", action="store_true", help="Skip CTG, save raw extraction")
+    parser.add_argument("--reasoning", action="store_true", help="Enable LLM reasoning/thinking mode")
     parser.add_argument("--batch", action="store_true", help="Process all files in directory")
     parser.add_argument("--json", action="store_true", help="Output progress as JSON (for GUI)")
     parser.add_argument("--work-dir", dest="work_dir", default=None, help="Existing workspace subdirectory to resume (skip extraction)")
+    parser.add_argument("--force", action="store_true", help="Clear existing workspace and reprocess from scratch")
     args = parser.parse_args()
 
     cfg = AppConfig.from_env()
@@ -433,10 +439,10 @@ def main():
         source = Path(args.source)
 
     if args.batch or (isinstance(source, Path) and source.is_dir()):
-        process_directory(source, cfg, llm_client, workspace_dir, json_mode=args.json, extract_only=args.extract_only, model=args.model or "")
+        process_directory(source, cfg, llm_client, workspace_dir, json_mode=args.json, extract_only=args.extract_only, model=args.model or "", reasoning=args.reasoning, force=args.force)
     else:
         existing_work_dir = Path(args.work_dir) if args.work_dir else None
-        process_single(source, cfg, llm_client, workspace_dir, json_mode=args.json, existing_work_dir=existing_work_dir, extract_only=args.extract_only, model=args.model or "")
+        process_single(source, cfg, llm_client, workspace_dir, json_mode=args.json, existing_work_dir=existing_work_dir, extract_only=args.extract_only, model=args.model or "", reasoning=args.reasoning, force=args.force)
 
 
 def _resolve_workspace(cli_arg: str | None, cfg: AppConfig) -> Path:

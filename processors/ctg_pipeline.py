@@ -12,10 +12,10 @@ from processors.generator import Generator
 class CTGPipeline:
     """Compression → Transformation → Generation pipeline."""
 
-    def __init__(self, llm_client, json_mode: bool = False):
-        self._compressor = Compressor(llm_client, json_mode=json_mode)
-        self._transformer = Transformer(llm_client)
-        self._chunked_transformer = ChunkedTransformer(llm_client, json_mode=json_mode)
+    def __init__(self, llm_client, json_mode: bool = False, reasoning: bool = False):
+        self._compressor = Compressor(llm_client, json_mode=json_mode, reasoning=reasoning)
+        self._transformer = Transformer(llm_client, reasoning=reasoning)
+        self._chunked_transformer = ChunkedTransformer(llm_client, json_mode=json_mode, reasoning=reasoning)
         self._generator = Generator()
         self._json_mode = json_mode
 
@@ -29,8 +29,15 @@ class CTGPipeline:
             raise ValueError("No content to process")
 
         self._chunked_transformer._work_dir = workspace_dir
+
+        self._emit("compression_start", chars=len(extracted.raw_text))
+        compressed = self._compressor.compress(extracted.raw_text)
+        compressed = Compressor.clean_artifacts(compressed)
+        self._emit("compression_done", chars=len(compressed))
+
+        self._emit("transformation_start")
         structured, metadata = self._chunked_transformer.map_reduce(
-            extracted.raw_text, extracted.metadata, source_path=source_path
+            compressed, extracted.metadata, source_path=source_path
         )
 
         metadata.source = extracted.metadata.source or metadata.source

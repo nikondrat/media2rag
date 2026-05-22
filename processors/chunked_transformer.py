@@ -27,22 +27,24 @@ class ChunkedTransformer:
         "- Combine overlapping points into single comprehensive statements\n"
         "- Preserve ALL facts, numbers, examples, frameworks, quotes\n"
         "- Maintain the source language\n"
-        "- Keep ## heading structure, use only ## headings\n"
+        "- Use ## headings for sub-sections within the merged content\n"
+        "- DO NOT use # headings — the section heading will be added automatically\n"
         "- If a section becomes empty after dedup, omit it\n"
         "- Output ONLY the merged markdown content\n"
         "- DO NOT add any introductory text, conclusions, summaries about the merging process\n"
         "- DO NOT write phrases like 'Here is the merged text', 'Ready for use', 'Based on the provided fragments'\n"
-        "- DO NOT add any meta-commentary — start directly with the first ## heading\n"
+        "- DO NOT repeat the section name as a heading — start directly with the merged content\n"
         "- The output must look like a final document section, not a response to a request"
     )
 
-    def __init__(self, llm_client, json_mode: bool = False, work_dir: Path | None = None):
-        self._transformer = Transformer(llm_client, json_mode=json_mode)
+    def __init__(self, llm_client, json_mode: bool = False, work_dir: Path | None = None, reasoning: bool = False):
+        self._transformer = Transformer(llm_client, json_mode=json_mode, reasoning=reasoning)
         self._chunker = SemanticChunker()
         self._client = llm_client
         self._json_mode = json_mode
         self._work_dir = work_dir
         self._parser = MarkdownOutputParser()
+        self._reasoning = reasoning
 
     def _emit(self, status: str, **kwargs):
         if self._json_mode:
@@ -56,14 +58,14 @@ class ChunkedTransformer:
         batch_size = 20
 
         try:
-            for token in self._client.chat_stream(prompt=prompt, system=system):
+            for token in self._client.chat_stream(prompt=prompt, system=system, reasoning=self._reasoning):
                 result_parts.append(token)
                 token_count += 1
                 if token_count % batch_size == 0:
                     self._emit("llm_token", tokens="".join(result_parts[-batch_size:]))
         except Exception:
             if not result_parts:
-                result_parts.append(self._client.chat(prompt=prompt, system=system))
+                result_parts.append(self._client.chat(prompt=prompt, system=system, reasoning=self._reasoning))
 
         return "".join(result_parts)
 
@@ -226,16 +228,17 @@ class ChunkedTransformer:
         if section_name == "_preamble":
             return content
         if len(content) < 500:
-            return f"## {section_name}\n\n{content}"
+            return f"# {section_name}\n\n{content}"
         try:
             response = self._chat_with_streaming(
                 prompt=f"Merge and deduplicate these content blocks:\n\n{content}",
                 system=self.DEDUP_SYSTEM_PROMPT,
             )
             cleaned = self._strip_meta_commentary(response.strip())
-            return f"## {section_name}\n\n{cleaned}"
+            cleaned = self._strip_section_headings(cleaned, section_name)
+            return f"# {section_name}\n\n{cleaned}"
         except Exception:
-            return f"## {section_name}\n\n{content}"
+            return f"# {section_name}\n\n{content}"
 
     def _merge_large_section(self, content: str, section_name: str, threshold: int, chunk_dir: Path) -> str:
         chunks = self._split_by_paragraphs(content, threshold)
@@ -244,7 +247,7 @@ class ChunkedTransformer:
         for i, chunk in enumerate(chunks):
             sub_file = chunk_dir / f"merged_sub_{re.sub(r'[^a-zA-Z0-9а-яА-ЯёЁ_-]', '_', section_name)}_{i}.md"
             if sub_file.exists():
-                merged_parts.append(sub_file.read_text(encoding="utf-8"))
+                merged_parts.append(self._strip_leading_heading(sub_file.read_text(encoding="utf-8")))
                 self._emit("merge_subsection_skip", section=section_name, part=i + 1)
                 continue
 
@@ -254,8 +257,9 @@ class ChunkedTransformer:
                     prompt=f"Merge and deduplicate these content blocks:\n\n{chunk}",
                     system=self.DEDUP_SYSTEM_PROMPT,
                 )
-                merged_parts.append(response.strip())
-                sub_file.write_text(response.strip(), encoding="utf-8")
+                stripped = self._strip_leading_heading(response.strip())
+                merged_parts.append(stripped)
+                sub_file.write_text(stripped, encoding="utf-8")
             except Exception:
                 merged_parts.append(chunk)
 
@@ -269,7 +273,7 @@ class ChunkedTransformer:
                         prompt=f"Merge these subsections into one:\n\n{combined}",
                         system=self.DEDUP_SYSTEM_PROMPT,
                     )
-                    result = response.strip()
+                    result = self._strip_leading_heading(response.strip())
                 except Exception:
                     result = combined
             else:
@@ -277,7 +281,7 @@ class ChunkedTransformer:
 
         if section_name == "_preamble":
             return result
-        return f"## {section_name}\n\n{result}"
+        return f"# {section_name}\n\n{result}"
 
     def _strip_meta_commentary(self, text: str) -> str:
         lines = text.split("\n")
@@ -329,6 +333,25 @@ class ChunkedTransformer:
                 continue
             filtered.append(line)
 
+        return "\n".join(filtered).strip()
+
+    def _strip_leading_heading(self, text: str) -> str:
+        """Remove the first ## heading line if present."""
+        lines = text.split("\n")
+        if lines and lines[0].strip().startswith("## "):
+            return "\n".join(lines[1:]).strip()
+        return text.strip()
+
+    def _strip_section_headings(self, text: str, section_name: str) -> str:
+        """Remove ALL occurrences of ## {section_name} and # {section_name} from the text."""
+        lines = text.split("\n")
+        filtered = []
+        skip_patterns = (f"## {section_name}", f"# {section_name}")
+        for line in lines:
+            stripped = line.strip()
+            if any(stripped == p or stripped.startswith(p + " ") for p in skip_patterns):
+                continue
+            filtered.append(line)
         return "\n".join(filtered).strip()
 
     def _split_by_paragraphs(self, text: str, max_size: int) -> list[str]:
@@ -398,7 +421,7 @@ class ChunkedTransformer:
         current_content = []
 
         for line in structured.split("\n"):
-            match = re.match(r"^## (.+)$", line.strip())
+            match = re.match(r"^# (.+)$", line.strip())
             if match:
                 if current_content:
                     sections.setdefault(current_section, []).append("\n".join(current_content).strip())

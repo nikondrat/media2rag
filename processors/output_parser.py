@@ -61,5 +61,5 @@ class MarkdownOutputParser:
             f"---\n\n"
             f"{example}"
             f"## BODY (preserve source language)\n"
-            f"[structured content here]\n"
+            f"[structured content with # Thesis, # Mechanism, etc.]\n"
         )

@@ -5,10 +5,13 @@ from domain.document import ExtractedContent, DocumentMetadata
 from extractors.base import BaseExtractor
 
 
+from clients.protocol import LLMClient
+
+
 class ImageExtractor(BaseExtractor):
     SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 
-    def __init__(self, vision_client):
+    def __init__(self, vision_client: LLMClient):
         self._vision_client = vision_client
 
     def extract(self, source: Path | str, workspace_dir: Path | None = None) -> ExtractedContent:

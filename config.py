@@ -20,6 +20,7 @@ class OpenRouterConfig:
     api_key: str = ""
     base_url: str = "https://openrouter.ai/api/v1"
     default_model: str = "qwen/qwen-plus"
+    vision_model: str = "qwen/qwen-vl-plus"
     timeout: int = 300
 
 
@@ -61,6 +62,7 @@ class AppConfig:
                     "OPENROUTER_API_KEY", os.getenv("OPENROUTER_API", "")
                 ),
                 default_model=os.getenv("OPENROUTER_MODEL", "qwen/qwen-plus"),
+                vision_model=os.getenv("OPENROUTER_VISION_MODEL", "qwen/qwen-vl-plus"),
             ),
             whisper=WhisperConfig(
                 model=os.getenv("WHISPER_MODEL", "large-v3"),

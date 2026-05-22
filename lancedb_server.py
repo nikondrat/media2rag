@@ -205,9 +205,10 @@ class LanceDBHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            escaped = document_id.replace("'", "''")
             with db_lock:
                 table = ensure_table(table_name)
-                table.delete(f"document_id = '{document_id}'")
+                table.delete(f"document_id = '{escaped}'")
             self._send_json({"status": "ok"})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

@@ -4,16 +4,20 @@ import urllib.error
 from typing import Optional, Generator
 
 from config import OllamaConfig
+from clients.protocol import LLMClient
 
 
-class OllamaClient:
+class OllamaClient(LLMClient):
     def __init__(self, cfg: OllamaConfig):
         self._base_url = cfg.base_url.rstrip("/")
         self._ctg_model = cfg.ctg_model
         self._vision_model = cfg.vision_model
         self._timeout = cfg.timeout
 
-    def chat(self, prompt: str, system: str = "", model: str = "", stream: bool = False) -> str:
+    def chat(self, prompt: str, system: str = "", model: str = "", stream: bool = False, reasoning: bool = False, max_tokens: int = 16000) -> str:
+        if reasoning:
+            return self._chat_with_reasoning(prompt, system, model)
+
         model_name = model or self._ctg_model
         payload = {
             "model": model_name,
@@ -35,8 +39,11 @@ class OllamaClient:
         else:
             return self._request("/api/generate", payload)
 
-    def chat_stream(self, prompt: str, system: str = "", model: str = "") -> Generator[str, None, None]:
+    def chat_stream(self, prompt: str, system: str = "", model: str = "", reasoning: bool = False, max_tokens: int = 16000) -> Generator[str, None, None]:
         """Yield tokens as they arrive from the model."""
+        if reasoning:
+            return self._stream_with_reasoning(prompt, system, model)
+
         model_name = model or self._ctg_model
         payload = {
             "model": model_name,
@@ -59,6 +66,72 @@ class OllamaClient:
             payload["system"] = system
 
         return self._request("/api/generate", payload)
+
+    def _chat_with_reasoning(self, prompt: str, system: str = "", model: str = "") -> str:
+        """Use /api/chat with think=true for reasoning models."""
+        model_name = model or self._ctg_model
+        messages = [{"role": "user", "content": prompt}]
+        if system:
+            messages.insert(0, {"role": "system", "content": system})
+
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": False,
+            "options": {"think": True},
+        }
+
+        url = f"{self._base_url}/api/chat"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                message = result.get("message", {})
+                return message.get("content", "").strip()
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"Ollama reasoning request failed: {e}")
+
+    def _stream_with_reasoning(self, prompt: str, system: str = "", model: str = "") -> Generator[str, None, None]:
+        """Use /api/chat with think=true and yield tokens."""
+        model_name = model or self._ctg_model
+        messages = [{"role": "user", "content": prompt}]
+        if system:
+            messages.insert(0, {"role": "system", "content": system})
+
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": True,
+            "options": {"think": True},
+        }
+
+        url = f"{self._base_url}/api/chat"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                for line in resp:
+                    if line:
+                        chunk = json.loads(line.decode("utf-8"))
+                        message = chunk.get("message", {})
+                        token = message.get("content", "")
+                        if token:
+                            yield token
+                        if chunk.get("done", False):
+                            break
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"Ollama reasoning stream failed: {e}")
 
     def is_available(self) -> bool:
         try:

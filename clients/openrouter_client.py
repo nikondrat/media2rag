@@ -5,9 +5,10 @@ import urllib.request
 from typing import Optional, Generator
 
 from config import OpenRouterConfig
+from clients.protocol import LLMClient
 
 
-class OpenRouterClient:
+class OpenRouterClient(LLMClient):
     def __init__(self, cfg: OpenRouterConfig):
         self._base_url = cfg.base_url.rstrip("/")
         self._api_key = cfg.api_key
@@ -15,7 +16,7 @@ class OpenRouterClient:
         self._timeout = cfg.timeout
         self._max_retries = 3
 
-    def chat(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000, stream: bool = False) -> str:
+    def chat(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000, stream: bool = False, reasoning: bool = False) -> str:
         if not self._api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
 
@@ -31,6 +32,8 @@ class OpenRouterClient:
             "stream": stream,
             "max_tokens": max_tokens,
         }
+        if reasoning:
+            payload["include_reasoning"] = True
 
         print(f"[LLM] Calling {model_name} via OpenRouter (stream={stream}), prompt length: {len(prompt)} chars", flush=True)
 
@@ -58,7 +61,7 @@ class OpenRouterClient:
         else:
             return self._request(req)
 
-    def chat_stream(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000) -> Generator[str, None, None]:
+    def chat_stream(self, prompt: str, system: str = "", model: str = "", max_tokens: int = 16000, reasoning: bool = False) -> Generator[str, None, None]:
         """Yield tokens as they arrive from the model."""
         if not self._api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
@@ -75,6 +78,8 @@ class OpenRouterClient:
             "stream": True,
             "max_tokens": max_tokens,
         }
+        if reasoning:
+            payload["include_reasoning"] = True
 
         url = f"{self._base_url}/chat/completions"
         data = json.dumps(payload).encode("utf-8")
@@ -92,6 +97,8 @@ class OpenRouterClient:
 
         return self._stream_request(req)
 
+    def _request(self, req: urllib.request.Request) -> str:
+        """Non-streaming request with retry logic."""
         last_error = None
         for attempt in range(self._max_retries):
             try:
@@ -164,6 +171,41 @@ class OpenRouterClient:
                 raise ConnectionError(f"OpenRouter stream request failed: {e.reason}")
 
         raise last_error or ConnectionError("OpenRouter stream request failed")
+
+    def chat_with_image(self, prompt: str, image_b64: str, system: str = "", model: str = "") -> str:
+        model_name = model or self._model
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+        ]
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": content})
+
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": 4096,
+        }
+
+        print(f"[LLM] Calling {model_name} via OpenRouter (vision), prompt length: {len(prompt)} chars", flush=True)
+
+        url = f"{self._base_url}/chat/completions"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._api_key}",
+                "HTTP-Referer": "https://github.com/nikondrat/media2rag",
+                "X-Title": "media2rag",
+            },
+            method="POST",
+        )
+
+        return self._request(req)
 
     def is_available(self) -> bool:
         return bool(self._api_key)

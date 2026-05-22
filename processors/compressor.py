@@ -14,9 +14,10 @@ class Compressor:
         "Keep the original language. Output ONLY the cleaned text."
     )
 
-    def __init__(self, llm_client, json_mode: bool = False):
+    def __init__(self, llm_client, json_mode: bool = False, reasoning: bool = False):
         self._client = llm_client
         self._json_mode = json_mode
+        self._reasoning = reasoning
 
     def _emit(self, status: str, **kwargs):
         if self._json_mode:
@@ -30,14 +31,14 @@ class Compressor:
         batch_size = 20
 
         try:
-            for token in self._client.chat_stream(prompt=prompt, system=system):
+            for token in self._client.chat_stream(prompt=prompt, system=system, reasoning=self._reasoning):
                 result_parts.append(token)
                 token_count += 1
                 if token_count % batch_size == 0:
                     self._emit("llm_token", tokens="".join(result_parts[-batch_size:]))
         except Exception:
             if not result_parts:
-                result_parts.append(self._client.chat(prompt=prompt, system=system))
+                result_parts.append(self._client.chat(prompt=prompt, system=system, reasoning=self._reasoning))
 
         return "".join(result_parts)
 
@@ -47,24 +48,24 @@ class Compressor:
 
         chunks = self._split_into_chunks(raw_text, max_input_tokens)
         if len(chunks) == 1:
-            self._emit("compressing_chunk", current=1, total=1)
+            self._emit("cleaning_part", current=1, total=1)
             result = self._chat_with_streaming(
                 prompt=f"Clean up this raw transcript:\n\n{chunks[0]}",
                 system=self.SYSTEM_PROMPT,
             )
-            self._emit("compressed_chunk", current=1, total=1)
+            self._emit("cleaning_part_done", current=1, total=1)
             return result
 
         compressed_chunks = []
         total = len(chunks)
         for i, chunk in enumerate(chunks, 1):
-            self._emit("compressing_chunk", current=i, total=total)
+            self._emit("cleaning_part", current=i, total=total)
             result = self._chat_with_streaming(
                 prompt=f"Clean up this raw transcript:\n\n{chunk}",
                 system=self.SYSTEM_PROMPT,
             )
             compressed_chunks.append(result)
-            self._emit("compressed_chunk", current=i, total=total)
+            self._emit("cleaning_part_done", current=i, total=total)
 
         return "\n\n".join(compressed_chunks)
 

@@ -28,15 +28,17 @@ class Transformer:
         "9. key_terms — 5-8 keywords for embedding retrieval (in source language for better search)\n\n"
 
         "## BODY (PRESERVE SOURCE LANGUAGE)\n"
-        "Restructure content into typed knowledge blocks. Use ONLY these H2 sections as applicable:\n"
-        "- ## Thesis — the core argument\n"
-        "- ## Mechanism — how the system/process works\n"
-        "- ## Pattern — recurring sequences or rules\n"
-        "- ## Evidence — data, examples, case studies\n"
-        "- ## Framework — decision models, mental models, how-to\n"
-        "- ## Steps — numbered actionable steps\n"
-        "- ## Definitions — key terms explained\n"
-        "- ## Quotes — verbatim impactful statements worth remembering\n\n"
+        "Restructure content into typed knowledge blocks. Use ONLY these H1 sections as applicable:\n"
+        "- # Thesis — the core argument\n"
+        "- # Mechanism — how the system/process works\n"
+        "- # Pattern — recurring sequences or rules\n"
+        "- # Evidence — data, examples, case studies\n"
+        "- # Framework — decision models, mental models, how-to\n"
+        "- # Steps — numbered actionable steps\n"
+        "- # Definitions — key terms explained\n"
+        "- # Quotes — verbatim impactful statements worth remembering\n\n"
+
+        "Use ## for sub-sections within each H1 section when needed.\n\n"
 
         "RULES FOR BODY:\n"
         "- Remove ALL: greetings, sign-offs, CTA, @mentions, 'in my previous post', 'subscribe', 'save this'\n"
@@ -56,10 +58,11 @@ class Transformer:
         "- End frontmatter with --- then write the body"
     )
 
-    def __init__(self, llm_client, json_mode: bool = False):
+    def __init__(self, llm_client, json_mode: bool = False, reasoning: bool = False):
         self._client = llm_client
         self._parser = MarkdownOutputParser()
         self._json_mode = json_mode
+        self._reasoning = reasoning
 
     def _emit(self, status: str, **kwargs):
         if self._json_mode:
@@ -73,14 +76,14 @@ class Transformer:
         batch_size = 20
 
         try:
-            for token in self._client.chat_stream(prompt=prompt, system=system):
+            for token in self._client.chat_stream(prompt=prompt, system=system, reasoning=self._reasoning):
                 result_parts.append(token)
                 token_count += 1
                 if token_count % batch_size == 0:
                     self._emit("llm_token", tokens="".join(result_parts[-batch_size:]))
         except Exception:
             if not result_parts:
-                result_parts.append(self._client.chat(prompt=prompt, system=system))
+                result_parts.append(self._client.chat(prompt=prompt, system=system, reasoning=self._reasoning))
 
         return "".join(result_parts)
 
