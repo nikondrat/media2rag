@@ -87,9 +87,27 @@ def ensure_parents_table():
         return t.create_table("parent_chunks_v2", schema=schema)
 
 
+def ensure_memories_table():
+    import pyarrow as pa
+    t = get_db()
+    try:
+        return t.open_table("memories")
+    except Exception:
+        schema = pa.schema([
+            pa.field("id", pa.string()),
+            pa.field("document_id", pa.string()),
+            pa.field("content", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), EMBED_DIMENSIONS)),
+            pa.field("metadata", pa.string()),
+        ])
+        return t.create_table("memories", schema=schema)
+
+
 def ensure_table(name, with_vector=True):
     if name == "parent_chunks":
         return ensure_parents_table()
+    if name == "memories":
+        return ensure_memories_table()
     return ensure_chunks_table()
 
 
@@ -339,6 +357,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
     def _handle_add(self):
         body = self._read_body()
         records = body.get("records", [])
+        table_name = body.get("table", "chunks_v2")
 
         if not records:
             self._send_json({"error": "no records"}, 400)
@@ -347,20 +366,24 @@ class LanceDBHandler(BaseHTTPRequestHandler):
         try:
             import pyarrow as pa
             with db_lock:
-                table = ensure_chunks_table()
+                table = ensure_table(table_name, with_vector=True)
                 data = []
                 for r in records:
                     row = {
                         "id": r.get("id", ""),
-                        "document_id": r.get("document_id", ""),
-                        "parent_id": r.get("parent_id", ""),
+                        "document_id": r.get("document_id", r.get("id", "")),
                         "content": r.get("content", ""),
                         "vector": [float(v) for v in r.get("embedding", [0.0] * EMBED_DIMENSIONS)],
-                        "section": r.get("section", ""),
-                        "chunk_index": r.get("chunk_index", 0),
-                        "content_type": r.get("content_type", "text"),
                         "metadata": json.dumps(r.get("metadata", {})),
                     }
+                    if "parent_id" in r:
+                        row["parent_id"] = r["parent_id"]
+                    if "section" in r:
+                        row["section"] = r["section"]
+                    if "chunk_index" in r:
+                        row["chunk_index"] = r["chunk_index"]
+                    if "content_type" in r:
+                        row["content_type"] = r["content_type"]
                     data.append(row)
 
                 arr = pa.Table.from_pylist(data)
@@ -424,6 +447,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
         query_vector = body.get("query", [])
         top_k = body.get("topK", 5)
         filter_expr = body.get("filter")
+        table_name = body.get("table", "chunks_v2")
 
         if not query_vector:
             self._send_json({"error": "no query vector"}, 400)
@@ -431,7 +455,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
 
         try:
             with db_lock:
-                table = ensure_chunks_table()
+                table = ensure_table(table_name, with_vector=True)
                 search = table.search(query_vector, vector_column_name="vector").limit(top_k)
                 if filter_expr:
                     search = search.where(filter_expr)
@@ -439,14 +463,13 @@ class LanceDBHandler(BaseHTTPRequestHandler):
 
             output = []
             for _, row in results.iterrows():
+                dist = float(row.get("_distance", 0.0))
                 output.append({
                     "id": row.get("id", ""),
                     "document_id": row.get("document_id", ""),
-                    "parent_id": row.get("parent_id", ""),
                     "content": row.get("content", ""),
-                    "section": row.get("section", ""),
                     "metadata": json.loads(row.get("metadata", "{}")),
-                    "score": float(row.get("_distance", 0.0)),
+                    "score": max(0.0, 1.0 - dist),
                 })
 
             self._send_json({"results": output})
