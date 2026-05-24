@@ -257,7 +257,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
                 return
 
             with db_lock:
-                table = get_db().open_table("chunks")
+                table = get_db().open_table("chunks_v2")
                 df = table.to_pandas()
                 row = df[df["id"] == chunk_id]
 
@@ -307,7 +307,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
     def _lookup_parent(self, parent_id: str) -> dict | None:
         try:
             with db_lock:
-                table = get_db().open_table("parent_chunks")
+                table = get_db().open_table("parent_chunks_v2")
                 df = table.to_pandas()
                 row = df[df["id"] == parent_id]
             if row.empty:
