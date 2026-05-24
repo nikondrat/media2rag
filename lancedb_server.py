@@ -108,6 +108,7 @@ def ensure_fts_index(table):
 def reciprocal_rank_fusion(results_lists: list[list[dict]], k: int = 60) -> list[dict]:
     scores: dict[str, float] = {}
     chunk_map: dict[str, dict] = {}
+    best_sim: dict[str, float] = {}
 
     for results in results_lists:
         for rank, item in enumerate(results):
@@ -115,12 +116,14 @@ def reciprocal_rank_fusion(results_lists: list[list[dict]], k: int = 60) -> list
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
             if cid not in chunk_map:
                 chunk_map[cid] = item
+            raw = item.get("_raw_score", 0.0)
+            best_sim[cid] = max(best_sim.get(cid, 0.0), raw)
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     output = []
-    for cid, score in ranked:
+    for cid, _ in ranked:
         item = chunk_map[cid].copy()
-        item["score"] = score
+        item["score"] = best_sim.get(cid, scores[cid])
         output.append(item)
     return output
 
@@ -516,6 +519,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
 
                 vector_output = []
                 for _, row in vector_results.iterrows():
+                    dist = float(row.get("_distance", 0.0))
                     vector_output.append({
                         "id": row.get("id", ""),
                         "document_id": row.get("document_id", ""),
@@ -523,7 +527,8 @@ class LanceDBHandler(BaseHTTPRequestHandler):
                         "content": row.get("content", ""),
                         "section": row.get("section", ""),
                         "metadata": json.loads(row.get("metadata", "{}")),
-                        "score": float(row.get("_distance", 0.0)),
+                        "score": dist,
+                        "_raw_score": max(0.0, 1.0 - dist),
                     })
                 results_lists.append(vector_output)
 
@@ -537,6 +542,7 @@ class LanceDBHandler(BaseHTTPRequestHandler):
 
                 fts_output = []
                 for _, row in fts_results.iterrows():
+                    fts_score = float(row.get("_score", 0.0))
                     fts_output.append({
                         "id": row.get("id", ""),
                         "document_id": row.get("document_id", ""),
@@ -544,8 +550,13 @@ class LanceDBHandler(BaseHTTPRequestHandler):
                         "content": row.get("content", ""),
                         "section": row.get("section", ""),
                         "metadata": json.loads(row.get("metadata", "{}")),
-                        "score": float(row.get("_score", 0.0)),
+                        "score": fts_score,
+                        "_raw_score": 0.0,
                     })
+                if fts_output:
+                    max_fs = max(r["score"] for r in fts_output) or 1.0
+                    for r in fts_output:
+                        r["_raw_score"] = r["score"] / max_fs
                 results_lists.append(fts_output)
 
             fused = reciprocal_rank_fusion(results_lists)[:top_k]
