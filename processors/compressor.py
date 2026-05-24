@@ -6,12 +6,38 @@ class Compressor:
     """Clean up raw transcripts: remove timestamps, filler words, noise."""
 
     SYSTEM_PROMPT = (
-        "Clean up this raw transcript. Remove:\n"
-        "- Timestamps like [0:00], [1:30], [2:56:34]\n"
-        "- Filler words and stutters\n"
-        "- Promotional content and CTAs\n\n"
-        "Preserve ALL facts, numbers, examples, frameworks, quotes, and actionable advice.\n"
-        "Keep the original language. Output ONLY the cleaned text."
+        "You are a transcript cleaning specialist. Clean up raw transcripts while preserving all valuable content.\n\n"
+        "REMOVE:\n"
+        "- Timestamps: [0:00], [1:30], [2:56:34], (00:00), etc.\n"
+        "- Filler words: um, uh, like, you know, basically, literally, etc.\n"
+        "- Stutters and repetitions\n"
+        "- Promotional content and CTAs (subscribe, follow, check link, etc.)\n"
+        "- Self-promotion and links to other content\n"
+        "- Sponsor reads and ad segments\n"
+        "- Off-topic small talk and tangents\n\n"
+        "PRESERVE:\n"
+        "- ALL facts, numbers, dates, statistics\n"
+        "- Examples, case studies, stories\n"
+        "- Frameworks, models, processes\n"
+        "- Quotes and verbatim statements\n"
+        "- Actionable advice and recommendations\n"
+        "- Speaker attribution and labels (e.g., 'Михаил Гребенюк:', 'Жанна:')\n"
+        "- The original language and tone\n\n"
+        "SPEAKER ATTRIBUTION RULES:\n"
+        "- Keep speaker names/labels at the start of their statements\n"
+        "- Remove conversational filler between speaker exchanges\n"
+        "- Preserve the dialogue structure in interviews\n\n"
+        "FEW-SHOT EXAMPLES:\n\n"
+        "BEFORE:\n"
+        '[0:00] Привет, добро пожаловать на наш подкаст. Um, как дела?\n[0:15] Да, всё отлично, спасибо! Перед началом — подпишитесь на наш канал.\n[0:30] Михаил: Итак, главный инсайт — 80% успеха это дисциплина.\n\n'
+        "AFTER:\n"
+        "Михаил: Главный инсайт — 80% успеха это дисциплина.\n\n"
+        "BEFORE:\n"
+        '[1:00] Жанна: Расскажите про ваш подход к инвестициям. Um, что вы думаете про...\n[1:15] Иван: Ну, знаете, я считаю что диверсификация — это ключ. Как бы, 60% акции, 40% облигации.\n\n'
+        "AFTER:\n"
+        "Жанна: Расскажите про ваш подход к инвестициям.\n"
+        "Иван: Диверсификация — это ключ. 60% акции, 40% облигации.\n\n"
+        "Output ONLY the cleaned text — no preamble, no commentary."
     )
 
     def __init__(self, llm_client, json_mode: bool = False, reasoning: bool = False):
@@ -23,6 +49,13 @@ class Compressor:
         if self._json_mode:
             obj = {"status": status, **kwargs}
             print(json.dumps(obj, ensure_ascii=False), flush=True)
+        else:
+            messages = {
+                "cleaning_part": f"  🧹 Cleaning transcript part {kwargs.get('current')}/{kwargs.get('total')}",
+                "cleaning_part_done": f"  ✅ Part {kwargs.get('current')}/{kwargs.get('total')} cleaned",
+            }
+            msg = messages.get(status, f"  [{status}] {kwargs}")
+            print(msg, flush=True)
 
     def _chat_with_streaming(self, prompt: str, system: str = "") -> str:
         """Call LLM with streaming and emit tokens as events."""

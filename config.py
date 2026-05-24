@@ -39,11 +39,20 @@ class MarkerConfig:
 
 
 @dataclass
+class EmbeddingConfig:
+    model: str = "intfloat/multilingual-e5-small"
+    dimensions: int = 384
+    child_tokens: int = 256
+    parent_tokens: int = 1024
+
+
+@dataclass
 class AppConfig:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     marker: MarkerConfig = field(default_factory=MarkerConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     output_dir: Path = field(default_factory=lambda: Path("output"))
     workspace_dir: Path | None = None
     llm_backend: str = "ollama"  # ollama or openrouter
@@ -67,6 +76,12 @@ class AppConfig:
             whisper=WhisperConfig(
                 model=os.getenv("WHISPER_MODEL", "large-v3"),
                 device=os.getenv("WHISPER_DEVICE", "cpu"),
+            ),
+            embedding=EmbeddingConfig(
+                model=os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small"),
+                dimensions=int(os.getenv("EMBED_DIMENSIONS", "384")),
+                child_tokens=int(os.getenv("CHUNK_CHILD_TOKENS", "256")),
+                parent_tokens=int(os.getenv("CHUNK_PARENT_TOKENS", "1024")),
             ),
             output_dir=Path(os.getenv("OUTPUT_DIR", "output")),
             workspace_dir=Path(workspace_env) if workspace_env else None,
