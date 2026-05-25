@@ -180,6 +180,7 @@ POST /api/rerank
 | bge-reranker-v2-m3 | 1.2GB | Русский, английский, китайский | Быстрая |
 | ms-marco-MiniLM-L-12-v2 | 500MB | Английский | Очень быстрая |
 | jina-reranker-v2-base | 2.5GB | Мультиязычная (50+) | Средняя |
+| pdurugyan/qwen3-reranker-0.6b-q8_0 | 0.6GB |  |  |
 
 ### Конфиг
 
@@ -196,6 +197,72 @@ Reranker не хардкодит язык — модель просто оцен
 
 ---
 
+## Parent Lookup
+
+**Зачем:** ищем в `children` (точные, 128 токенов), а в LLM отправляем `parents` (контекстные, 512 токенов).
+
+### Алгоритм
+
+```go
+func (s *Store) ParentLookup(ctx context.Context, results []SearchResult) ([]ParentChunk, error) {
+    // 1. Собираем уникальные parent_id из найденных child
+    parentIDs := make(map[string]bool)
+    for _, r := range results {
+        pid := r.Payload["parent_id"].(string)
+        if pid != "" {
+            parentIDs[pid] = true
+        }
+    }
+
+    // 2. Запрашиваем parents из Qdrant
+    parents, err := s.client.Get(ctx, &qdrant.GetPoints{
+        Collection: "parents",
+        IDs:        toSlice(parentIDs),
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. Сортируем по количеству child-совпадений
+    for _, p := range parents {
+        matchCount := countChildMatches(p, results)
+        ranked = append(ranked, ParentChunk{
+            Content:     p.Payload["content"].(string),
+            MatchCount:  matchCount,
+            DocumentID:  p.Payload["document_id"].(string),
+        })
+    }
+    sort.Slice(ranked, func(i, j int) bool {
+        return ranked[i].MatchCount > ranked[j].MatchCount
+    })
+
+    return ranked, nil
+}
+```
+
+### Принцип
+
+```
+child_42: "HNSW m=16"          ─┐
+child_45: "ef_construct 200"   ─┼── parent_12 (3 совпадения)
+child_47: "оптимизация поиска" ─┘
+
+child_12: "установка Qdrant"   ── parent_05 (1 совпадение)
+
+→ LLM получает: parent_12, parent_05
+```
+
+### v2: Parent + child цитаты
+
+```markdown
+## Qdrant HNSW параметры
+Parent chunk content...
+
+> Цитата: "HNSW m=16 обеспечивает баланс..." (child)
+> Цитата: "ef_construct влияет на качество индекса" (child)
+```
+
+---
 ## Context Build (TBD)
 
 Format context from search results → LLM prompt.
