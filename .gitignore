@@ -32,3 +32,6 @@ output/
 # System
 __pycache__/
 *.pyc
+
+# Binary
+media2rag
