@@ -1,198 +1,172 @@
 # Vector Store — Qdrant Schema
 
-## Collections
+## Коллекции
 
-**Одна коллекция: `chunks`**
+**Две коллекции:**
 
-Parent и child чанки живут в одной коллекции. Различаются полем `parent_id`:
-- Если `parent_id == ""` — это parent chunk (крупный, 512 токенов)
-- Если `parent_id != ""` — это child chunk (мелкий, 128 токенов)
+| Коллекция | Размер чанка | Назначение |
+|-----------|-------------|------------|
+| `parents` | ~512 токенов | Хранение контекста для LLM |
+| `children` | ~128 токенов | Точный поиск по запросу |
 
-Это упрощает поиск: один запрос в одну коллекцию. Parent lookup через `parent_id` на клиенте (Go).
+**Как работает parent-child:**
+1. Индексируем мелкие чанки (children) — они точнее матчатся на запрос
+2. После поиска → достаём parent по `parent_id`
+3. Отдаём LLM parent-чанки — они дают полный контекст
 
-## Схема точек
+```
+Запрос → поиск в children → parent_id → lookup в parents → контекст для LLM
+```
+
+## Embedding модель
+
+**Не привязаны к конкретной модели.** Размерность вектора задаётся в конфиге:
+
+```yaml
+llm:
+  embedding_model: qwen3-embedding:0.6b  # или nomic-embed-text, text-embedding-3-small, etc.
+  embedding_dim: 1024                     # размерность под модель
+```
+
+Qdrant коллекция создаётся с размерностью, соответствующей модели. Если модель меняется — нужна новая коллекция (либо реиндексация).
+
+## Parent collection: `parents`
 
 ```go
-type Point struct {
-    ID           string    // UUIDv4 (content_hash based)
-    Vector       []float32 // dense embedding (768d for nomic-embed-text)
-    SparseVector []SparseValue // sparse for BM25
+type ParentPoint struct {
+    ID      string  // UUIDv4
+    Vector  []float32 // dense embedding
 
     Payload struct {
-        // Идентификация
         DocumentID  string `json:"document_id"`
         DocType     string `json:"doc_type"`     // transcript, article, pdf, markdown
-        Source      string `json:"source"`       // URL или путь к файлу
+        Source      string `json:"source"`       // URL или путь
         Title       string `json:"title"`
-
-        // Чанк
         Content     string `json:"content"`        // текст чанка
         ChunkIndex  int    `json:"chunk_index"`    // порядковый номер
-        ParentID    string `json:"parent_id"`      // пусто — значит сам parent
-        ContentHash string `json:"content_hash"`   // SHA-256 для дедупликации
-
-        // Метаданные
         Section     string `json:"section,omitempty"`
         Language    string `json:"language,omitempty"`
-        Topics      string `json:"topics,omitempty"` // comma-separated
-        CreatedAt   int64  `json:"created_at"`       // unix timestamp
+        ContentHash string `json:"content_hash"`   // SHA-256 для дедупликации
+        CreatedAt   int64  `json:"created_at"`
     }
 }
 ```
 
-**Зачем ContentHash в payload:** дедупликация на клиенте при поиске (проверять `seenHashes`).
+**Индексы (создаются ДО вставки):**
 
-## Индексы (payload fields)
+| Field | Type |
+|-------|------|
+| `document_id` | keyword |
+| `doc_type` | keyword |
+| `content_hash` | keyword |
+| `created_at` | integer |
 
-Создаются ДО вставки данных (Qdrant строит HNSW граф с учётом индексов):
+## Children collection: `children`
 
-| Field | Type | Зачем |
-|-------|------|-------|
-| `document_id` | keyword | Фильтр поиска по конкретному документу |
-| `doc_type` | keyword | Фильтр по типу контента |
-| `parent_id` | keyword | Поиск parent по id |
-| `content_hash` | keyword | Для дедупликации на серверной стороне |
-| `created_at` | integer | Сортировка/фильтр по дате |
+```go
+type ChildPoint struct {
+    ID      string  // UUIDv4
+    Vector  []float32 // dense embedding
 
-**Не индексируем:** `content` (текст) — он идёт через sparse vector / dense vector.
+    Payload struct {
+        DocumentID  string `json:"document_id"`
+        ParentID    string `json:"parent_id"`      // ссылка на parent
+        Content     string `json:"content"`        // текст чанка
+        ChunkIndex  int    `json:"chunk_index"`
+        ContentHash string `json:"content_hash"`
+        CreatedAt   int64  `json:"created_at"`
+    }
+}
+```
 
-## Вектора
+**Индексы:**
 
-### Dense (плотный)
+| Field | Type |
+|-------|------|
+| `document_id` | keyword |
+| `parent_id` | keyword |
+| `content_hash` | keyword |
+| `created_at` | integer |
 
-- Размерность: зависит от embedding модели
-  - `nomic-embed-text`: 768d
-  - `text-embedding-3-small`: 1536d
-  - `qwen3-embedding`: зависит от модели
-- Distance: `Cosine`
-- Индекс: `HNSW` (дефолтный)
+## Sparse vectors (BM25)
 
-### Sparse (разреженный)
+Обе коллекции содержат sparse vector для гибридного поиска:
 
-- Встроенная поддержка Qdrant (v1.10+)
-- Строится автоматически из текста
-- Используется для BM25-style поиска
-- Не требует отдельного FTS индекса
+```go
+// Qdrant поддерживает sparse vectors из коробки (v1.10+)
+// Строятся автоматически из текста при индексации
+type SparseVectorParams struct {
+    Index *SparseIndexConfig{
+        FullScanThreshold: 10000, // переключение на full scan при < 10K точек
+    }
+}
+```
+
+Гибридный поиск: dense (семантический) + sparse (BM25) через RRF fusion.
 
 ## Hybrid Search
 
 ```go
-type HybridSearchRequest struct {
-    QueryText  string   // оригинальный запрос
-    QueryEmbed []float32 // эмбеддинг запроса
-    TopK       int
-    DocumentID string   // опционально: фильтр по документу
-}
-
-type SearchResult struct {
-    Point
-    Score float64
-}
-```
-
-Qdrant выполняет prefetch для dense и sparse параллельно, затем RRF (Reciprocal Rank Fusion):
-
-```go
-// Псевдокод
-func (s *Store) HybridSearch(ctx context.Context, req HybridSearchRequest) ([]SearchResult, error) {
-    filter := buildFilter(req.DocumentID)
-
-    results, err := s.client.Query(ctx, &qdrant.QueryPoints{
-        Collection: "chunks",
-        Prefetch: []*qdrant.PrefetchQuery{
-            {Query: req.QueryEmbed, Using: "dense", Limit: req.TopK * 2},
-            {Query: req.QueryText, Using: "sparse", Limit: req.TopK * 2},
+func (s *Store) HybridSearch(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+    // Параллельные prefetch: dense + sparse
+    // RRF fusion через Qdrant
+    results := s.client.Query(ctx, &qdrant.QueryPoints{
+        Collection: "children",
+        Prefetch: []*PrefetchQuery{
+            {Query: denseVector, Using: "dense", Limit: req.TopK * 2},
+            {Query: queryText,  Using: "sparse", Limit: req.TopK * 2},
         },
-        Query:     fusionQuery, // RRF fusion
-        Filter:    filter,
-        Limit:     req.TopK,
+        Query:  fusionQuery, // RRF
+        Filter: buildFilter(req),
+        Limit:  req.TopK,
         WithPayload: true,
     })
 }
 ```
 
-## Batch Upsert
+## Parent lookup
 
 ```go
-func (s *Store) UpsertChunks(ctx context.Context, chunks []Point) error {
-    batchSize := 100
-    for i := 0; i < len(chunks); i += batchSize {
-        end := min(i+batchSize, len(chunks))
-        batch := chunks[i:end]
-        points := toQdrantPoints(batch)
-        _, err := s.client.UpsertPoints(ctx, &qdrant.UpsertPoints{
-            Collection: "chunks",
-            Points:     points,
-        })
-        if err != nil {
-            return err
-        }
-    }
-    return nil
-}
-```
-
-## Parent-Child Lookup
-
-После поиска child-чанков, заменяем их на parent-чанки для контекста:
-
-```go
-func (s *Store) GetParentChunks(ctx context.Context, results []SearchResult) ([]SearchResult, error) {
-    parentIDs := extractUniqueParentIDs(results)
-    points, err := s.client.GetPoints(ctx, &qdrant.GetPoints{
-        Collection: "chunks",
+func (s *Store) GetParents(ctx context.Context, results []SearchResult) ([]ParentPoint, error) {
+    parentIDs := uniqueParentIDs(results)
+    // lookup в parents по parent_id
+    points := s.client.Get(ctx, &qdrant.GetPoints{
+        Collection: "parents",
         IDs:        parentIDs,
     })
-    // Группируем child → parent, усредняем scores
+    // маппинг: child → parent
 }
 ```
 
-## Инициализация
+## Создание коллекций
 
 ```go
-func (s *Store) Init(ctx context.Context) error {
-    collections, err := s.client.ListCollections(ctx)
-    if err != nil {
-        return err
-    }
-
-    // Создаём коллекцию если нет
-    if !hasCollection(collections, "chunks") {
-        _, err := s.client.CreateCollection(ctx, &qdrant.CreateCollection{
-            CollectionName: "chunks",
-            VectorsConfig: &qdrant.VectorsConfig{
-                Dense: &qdrant.VectorParams{
-                    Size:     768, // nomic-embed-text
-                    Distance: qdrant.Distance_Cosine,
-                },
+func (s *Store) InitCollections(ctx context.Context, dim int) error {
+    for _, name := range []string{"parents", "children"} {
+        s.client.CreateCollection(ctx, &qdrant.CreateCollection{
+            CollectionName: name,
+            VectorsConfig: VectorsConfig{
+                Size: dim,  // из config.yaml
+                Distance: Distance_Cosine,
             },
-            SparseVectorsConfig: &qdrant.SparseVectorConfig{
-                Sparse: &qdrant.SparseVectorParams{
-                    Index: &qdrant.SparseIndexConfig{
-                        FullScanThreshold: 10000,
-                    },
-                },
+            SparseVectorsConfig: SparseVectorConfig{
+                Sparse: &SparseVectorParams{},
             },
         })
-        if err != nil {
-            return err
-        }
-    }
-
-    // Создаём payload индексы
-    indexes := map[string]qdrant.FieldType{
-        "document_id":   qdrant.FieldType_Keyword,
-        "doc_type":      qdrant.FieldType_Keyword,
-        "parent_id":     qdrant.FieldType_Keyword,
-        "content_hash":  qdrant.FieldType_Keyword,
-        "created_at":    qdrant.FieldType_Integer,
-    }
-    for field, typ := range indexes {
-        s.client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndex{
-            Collection: "chunks",
-            FieldName:  field,
-            FieldType:  typ,
-        })
+        // payload индексы
     }
 }
+```
+
+## Конфиг
+
+```yaml
+qdrant:
+  url: localhost:6334  # gRPC порт
+  timeout: 30s
+
+llm:
+  embedding_model: qwen3-embedding:0.6b
+  embedding_dim: 1024          # размерность под модель
+  embedding_url: http://localhost:11434  # Ollama для эмбеддингов
 ```
