@@ -76,10 +76,45 @@ Query: {rewritten_query}
 
 ## Hybrid Search
 
-v1: базовый dense search через Qdrant.
-v2: sparse (BM25) + dense, RRF fusion.
+### Dense (семантический)
+- Эмбеддинг вопроса → косинусная близость с эмбеддингами чанков
+- Хорошо: понимает смысл, синонимы, концепции
+- Плохо: теряет точные термины
 
-Детали: [vector-store.md](vector-store.md)
+### Sparse (BM25)
+- Частотный анализ слов в чанках
+- Хорошо: точные термины, имена, редкие слова
+- Плохо: не понимает смысл
+
+### RRF Fusion
+
+Qdrant выполняет оба поиска параллельно (prefetch), затем объединяет через Reciprocal Rank Fusion:
+
+```go
+// Score = 1/(k + rank_dense) + 1/(k + rank_sparse)
+// k = 60 (константа сглаживания)
+```
+
+```
+prefetch dense  (topK * 2)    prefetch sparse (topK * 2)
+         │                            │
+         └────────── RRF ─────────────┘
+                        │
+                   результат (topK)
+```
+
+### Конфиг
+
+```yaml
+rag:
+  hybrid_search:
+    enabled: true
+    dense_weight: 0.5     # вес dense в RRF
+    sparse_weight: 0.5    # вес sparse
+    rrf_k: 60             # константа сглаживания
+```
+
+Детали реализации: [vector-store.md](vector-store.md)
 
 ---
 
