@@ -40,8 +40,8 @@ class MarkerConfig:
 
 @dataclass
 class EmbeddingConfig:
-    model: str = "intfloat/multilingual-e5-small"
-    dimensions: int = 384
+    model: str = "qwen3-embedding:0.6b"
+    dimensions: int = 1024
     child_tokens: int = 256
     parent_tokens: int = 1024
 
@@ -78,8 +78,8 @@ class AppConfig:
                 device=os.getenv("WHISPER_DEVICE", "cpu"),
             ),
             embedding=EmbeddingConfig(
-                model=os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-small"),
-                dimensions=int(os.getenv("EMBED_DIMENSIONS", "384")),
+                model=os.getenv("EMBED_MODEL", "qwen3-embedding:0.6b"),
+                dimensions=int(os.getenv("EMBED_DIMENSIONS", "1024")),
                 child_tokens=int(os.getenv("CHUNK_CHILD_TOKENS", "256")),
                 parent_tokens=int(os.getenv("CHUNK_PARENT_TOKENS", "1024")),
             ),

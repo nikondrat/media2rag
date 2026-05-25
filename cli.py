@@ -175,8 +175,6 @@ def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_c
     if json_mode:
         emit_json("extracted", file=str(source), type="markdown", words=extracted.metadata.word_count)
 
-    _run_ingestion(extracted, str(source), cfg, json_mode)
-
     if not llm_client:
         doc = RAGDocument(
             markdown=f"# {title}\n\n{raw_text}",
@@ -185,6 +183,9 @@ def _resume_processing(work_dir: Path, source: Path | str, cfg: AppConfig, llm_c
     else:
         pipeline = CTGPipeline(llm_client, json_mode=json_mode, reasoning=reasoning, quality_check=quality_check)
         doc = pipeline.process(extracted, str(source), workspace_dir=work_dir)
+
+    ingest_doc = ExtractedContent(raw_text=doc.markdown, metadata=doc.metadata)
+    _run_ingestion(ingest_doc, str(source), cfg, json_mode)
 
     output_path = doc.save(Path(), workspace_dir=work_dir)
 
@@ -302,8 +303,6 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
     )
     intermediate_str = str(intermediate_path)
 
-    _run_ingestion(extracted, source_str, cfg, json_mode)
-
     if not llm_client:
         from domain.document import RAGDocument
         doc = RAGDocument(
@@ -313,6 +312,9 @@ def process_single(source: Path | str, cfg: AppConfig, llm_client, workspace_dir
     else:
         pipeline = CTGPipeline(llm_client, json_mode=json_mode, reasoning=reasoning, quality_check=quality_check)
         doc = pipeline.process(extracted, source_str, workspace_dir=file_workspace)
+
+    ingest_doc = ExtractedContent(raw_text=doc.markdown, metadata=doc.metadata)
+    _run_ingestion(ingest_doc, source_str, cfg, json_mode)
 
     output_path = doc.save(Path(), workspace_dir=file_workspace)
 

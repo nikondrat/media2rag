@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reindex all workspace directories from intermediate/raw.md into chunks_v2."""
+"""Reindex all workspace directories. Prefers output/final.md (CTG), falls back to intermediate/raw.md."""
 
 import sys
 from pathlib import Path
@@ -44,30 +44,46 @@ def extract_metadata_from_raw(text: str) -> tuple[str, str]:
 
 
 def reindex_workspace(workspace: Path, pipeline: IngestionPipeline) -> dict | None:
+    final_md = workspace / "output" / "final.md"
     raw_md = workspace / "intermediate" / "raw.md"
-    if not raw_md.exists():
-        return None
 
-    text = raw_md.read_text(encoding="utf-8")
-    title, body = extract_metadata_from_raw(text)
+    if final_md.exists():
+        text = final_md.read_text(encoding="utf-8")
+        title, body = extract_metadata_from_raw(text)
+        source = workspace.name
+        if not body.strip():
+            return None
+        extracted = ExtractedContent(
+            raw_text=body,
+            metadata=DocumentMetadata(
+                title=title or workspace.name,
+                source=source,
+                doc_type="document",
+                word_count=len(body.split()),
+            ),
+        )
+        result = pipeline.ingest(extracted, source)
+        return result
 
-    if not body.strip():
-        return None
+    if raw_md.exists():
+        text = raw_md.read_text(encoding="utf-8")
+        title, body = extract_metadata_from_raw(text)
+        if not body.strip():
+            return None
+        source = workspace.name
+        extracted = ExtractedContent(
+            raw_text=body,
+            metadata=DocumentMetadata(
+                title=title or workspace.name,
+                source=source,
+                doc_type="video",
+                word_count=len(body.split()),
+            ),
+        )
+        result = pipeline.ingest(extracted, source)
+        return result
 
-    source = workspace.name
-
-    extracted = ExtractedContent(
-        raw_text=body,
-        metadata=DocumentMetadata(
-            title=title or workspace.name,
-            source=source,
-            doc_type="video",
-            word_count=len(body.split()),
-        ),
-    )
-
-    result = pipeline.ingest(extracted, source)
-    return result
+    return None
 
 
 def main():
@@ -87,6 +103,8 @@ def main():
 
     total_chunks = 0
     total_parents = 0
+    total_final = 0
+    total_raw = 0
     errors = 0
 
     for i, ws in enumerate(workspaces, 1):
@@ -94,20 +112,25 @@ def main():
         print(f"[{i}/{len(workspaces)}] {name[:60]}...", end=" ", flush=True)
 
         try:
+            source_type = "final.md" if (ws / "output" / "final.md").exists() else "raw.md"
             result = reindex_workspace(ws, pipeline)
             if result:
                 chunks = result["chunks"]
                 parents = result["parents"]
                 total_chunks += chunks
                 total_parents += parents
-                print(f"OK ({chunks} chunks, {parents} parents)")
+                if source_type == "final.md":
+                    total_final += 1
+                else:
+                    total_raw += 1
+                print(f"OK ({chunks} chunks, {parents} parents, from {source_type})")
             else:
                 print("SKIP (empty)")
         except Exception as e:
             errors += 1
             print(f"ERROR: {e}")
 
-    print(f"\nDone: {len(workspaces)} workspaces, {total_chunks} chunks, {total_parents} parents, {errors} errors")
+    print(f"\nDone: {len(workspaces)} workspaces ({total_final} final.md, {total_raw} raw.md), {total_chunks} chunks, {total_parents} parents, {errors} errors")
 
 
 if __name__ == "__main__":

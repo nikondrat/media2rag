@@ -13,8 +13,8 @@ LANCEDB_PATH = os.path.expanduser(os.environ.get(
     "LANCEDB_PATH", "~/Documents/media2rag/lancedb"
 ))
 SERVER_PORT = int(os.environ.get("LANCEDB_SERVER_PORT", "54321"))
-EMBED_DIMENSIONS = int(os.environ.get("EMBED_DIMENSIONS", "384"))
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "intfloat/multilingual-e5-small")
+EMBED_DIMENSIONS = int(os.environ.get("EMBED_DIMENSIONS", "1024"))
+EMBED_OLLAMA_MODEL = os.environ.get("EMBED_OLLAMA_MODEL", "qwen3-embedding:0.6b")
 
 db = None
 db_lock = threading.Lock()
@@ -32,23 +32,17 @@ def get_db():
 def get_embedder():
     global embedder
     if embedder is None:
-        from sentence_transformers import SentenceTransformer
-        embedder = SentenceTransformer(EMBED_MODEL)
+        from clients.ollama_embedder import OllamaEmbedder
+        embedder = OllamaEmbedder(model=EMBED_OLLAMA_MODEL)
     return embedder
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    model = get_embedder()
-    prefixed = [f"passage: {t}" for t in texts]
-    embeddings = model.encode(prefixed, normalize_embeddings=True)
-    return embeddings.tolist()
+    return get_embedder().embed_passages(texts)
 
 
 def embed_query(text: str) -> list[float]:
-    model = get_embedder()
-    prefixed = f"query: {text}"
-    embedding = model.encode([prefixed], normalize_embeddings=True)
-    return embedding[0].tolist()
+    return get_embedder().embed_query(text)
 
 
 def ensure_chunks_table():
