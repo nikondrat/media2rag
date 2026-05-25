@@ -374,6 +374,106 @@ Source [2]:
 
 ---
 
-## Memory (TBD)
+## Memory
 
-Recall past session context.
+**Зачем:** пользователь задаёт несколько вопросов подряд. Без памяти каждый вопрос живёт сам по себе.
+
+### Два уровня памяти
+
+**1. История диалога** — последние N сообщений (дефолт: 5)
+- Хранится в SQLite
+- Всегда включается в контекст
+
+**2. Факты** — извлечённые LLM ключевые факты о пользователе/темах
+- Хранятся в Qdrant (отдельная коллекция `memories`)
+- Ищутся по релевантности (mini-RAG)
+
+### Управление бесконечным чатом
+
+```
+Чат: 50 сообщений
+   │
+   ├─ Последние 5: полный текст
+   ├─ Сообщения 6-50: LLM суммаризует в 1-2 предложения
+   │   "Пользователь спрашивал про HNSW, обсуждали m=16, ef=200"
+   └─ Факты: извлечены из диалога, ищутся по релевантности
+```
+
+### Извлечение фактов
+
+После каждого ответа LLM получает промпт:
+
+```
+Extract any new facts about the user or topics discussed.
+Output one fact per line, max 3 facts.
+
+Dialogue:
+{last_exchange}
+
+Facts:
+```
+
+Факты сохраняются в Qdrant:
+
+```go
+type MemoryEntry struct {
+    ID        string    // UUID
+    Content   string    // "Пользователь интересуется HNSW"
+    UserID    string
+    CreatedAt int64
+}
+```
+
+### Поиск по памяти
+
+```go
+func (m *Memory) Recall(ctx context.Context, query string, topK int) ([]MemoryEntry, error) {
+    // 1. Embed query
+    embedding := m.llm.Embed(ctx, query)
+
+    // 2. Search in Qdrant memories collection
+    results := m.qdrant.Search(ctx, "memories", embedding, topK)
+
+    // 3. No reranker needed — cosine similarity is enough for short facts
+    return results, nil
+}
+```
+
+### Контекст с памятью
+
+```
+--- Recent History ---
+User: расскажи про HNSW
+Assistant: HNSW это графовый индекс...
+
+--- Relevant Memories ---
+[1]: "Пользователь интересуется параметрами HNSW"
+[2]: "Проект: настройка Qdrant"
+
+--- Question ---
+а какие у него параметры?
+```
+
+### Коллекция `memories` в Qdrant
+
+```yaml
+collection: memories
+vectors:
+  size: 768  # зависит от embedding модели
+  distance: Cosine
+payload:
+  content: text
+  user_id: keyword
+  created_at: integer
+```
+
+### Конфиг
+
+```yaml
+rag:
+  memory:
+    enabled: true
+    history_length: 5        # сообщений в контексте
+    max_facts_per_message: 3 # сколько фактов извлекать
+    memory_top_k: 3          # сколько фактов искать
+```
