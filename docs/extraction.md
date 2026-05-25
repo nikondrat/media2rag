@@ -168,7 +168,47 @@ process "./doc.pdf"
 
 Только два экстрактора на v1. Всё URL → rdrr. Всё локальное → LocalFileExtractor (только `.md`).
 
-## Workspace Structure
+## Future Ideas (на подумать)
+
+### Всё через rdrr + временный HTTP сервер
+
+Для локальных файлов, которые rdrr умеет обрабатывать (PDF, HTML), можно поднять временный HTTP сервер в Go и скормить URL rdrr:
+
+```
+./document.pdf
+  │
+  ▼
+Go: запускает http.Server на localhost:0
+  │
+  ▼
+npx rdrr http://localhost:XXXX/document.pdf
+  │
+  ▼
+Markdown
+```
+
+**Когда пригодится:** когда понадобится обрабатывать PDF-файлы без Python.
+
+### Whisper для аудио/видео
+
+rdrr не умеет транскрибировать аудио и видео. Для YouTube он берёт готовые субтитры, но для локальных MP3/MP4 нужен Whisper.
+
+**Варианты:**
+- `whisper` subprocess (Python) — как сейчас
+- `whisper.cpp` CGo — быстрее, без Python
+- `whisper-rs` — Rust биндинги через CGo
+
+### EPUB
+
+Для EPUB нужен парсер контейнера. rdrr не поддерживает. Варианты:
+- `go-epub` — Go-native библиотека
+- Python subprocess через ebooklib
+
+### Telegram каналы
+
+rdrr умеет отдельные посты, но не умеет скачивать историю канала. Для batch-загрузки каналов:
+- `gotd` (Go-native Telegram клиент)
+- Telethon subprocess (Python)
 
 ```
 ~/.media2rag/workspace/
