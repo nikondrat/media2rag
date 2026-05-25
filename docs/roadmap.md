@@ -46,6 +46,40 @@
 │  ┌────────────────────────────────────────────────────┐  │
 │  │  External Services                                 │  │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │  │
+│  │  │  Ollama  │  │OpenRouter│  │  Qdrant           │  │  │
+│  │  │ localhost│  │  API     │  │  localhost:6334   │  │  │
+│  │  │ :11434   │  │  HTTP    │  │  (Rust бинарник)  │  │  │
+│  │  └──────────┘  └──────────┘  └──────────────────┘  │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+```
+┌──────────────────────────────────────────────────────────┐
+│  Клиенты (тонкие)                                        │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐  │
+│  │ macOS GUI│  │   Web    │  │   CLI    │  │TG Bot   │  │
+│  │ (Swift)  │  │ (React)  │  │ (iterm2) │  │ (Go)    │  │
+│  └─────┬────┘  └────┬─────┘  └────┬─────┘  └────┬────┘  │
+│        │            │              │              │       │
+│        ├── subprocess (--json) ────┘              │       │
+│        └── HTTP REST + WebSocket ─────────────────┘       │
+└──────────────────────────┬───────────────────────────────┘
+                           │
+┌──────────────────────────▼───────────────────────────────┐
+│  media2rag (Go) — единый бинарник                        │
+│                                                          │
+│  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │  CLI Mode  │  │  Serve Mode  │  │  Shared Core     │  │
+│  │            │  │              │  │                  │  │
+│  │• process   │  │• POST /proc  │  │• extraction      │  │
+│  │• ask       │  │• GET /chat   │  │• pipeline (CTG)  │  │
+│  │• chat      │  │• POST /query │  │• RAG engine      │  │
+│  │• extract   │  │• WS /stream  │  │• LLM clients     │  │
+│  │            │  │• POST /coach │  │• memory          │  │
+│  └────────────┘  └──────────────┘  └──────────────────┘  │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  External Services                                 │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │  │
 │  │  │  Ollama  │  │OpenRouter│  │  LanceDB Server   │  │  │
 │  │  │ localhost│  │  API     │  │  localhost:54321  │  │  │
 │  │  │ :11434   │  │  HTTP    │  │  (Python процесс) │  │  │
@@ -138,7 +172,7 @@ type Stage func(ctx context.Context, input string, emitter EventEmitter) (string
 
 ```go
 type RAGEngine struct {
-    vectorStore VectorStore    // LanceDB HTTP client
+    vectorStore VectorStore    // Qdrant client
     llm         LLMClient
     memory      MemoryStore
 }
@@ -190,38 +224,53 @@ type LLMClient interface {
 
 ## План реализации (фазы)
 
-### Фаза 0: Фундамент
+### Фаза 1: Core Engine (Ядро)
 - [ ] Go-модуль + структура проекта
 - [ ] Система конфигурации (env + yaml)
 - [ ] Event emitter (JSON логгер)
 - [ ] LLM clients (Ollama + OpenRouter)
-- [ ] SQLite store (сессии, память, настройки)
-- [ ] LanceDB HTTP client
-
-### Фаза 1: Обработка файлов (subprocess mode)
+- [ ] SQLite store (сессии, память, настройки) + схема БД
+- [ ] Qdrant client + инициализация коллекций
 - [ ] `process` команда
-- [ ] Экстракторы (Python subprocess)
+- [ ] Экстракторы (rdrr для URL, local Markdown)
 - [ ] CTG pipeline (Compress + Transform + Generate)
 - [ ] JSON event streaming
 - [ ] Progress reporting
 - [ ] Работа с workspace
-
-### Фаза 2: Daemon (serve mode)
-- [ ] HTTP router (net/http + chi/fiber)
-- [ ] WebSocket handler
+- [ ] RAG engine (hybrid search, rerank, parent lookup)
 - [ ] Chat API + session management
-- [ ] RAG API (query + stream)
-- [ ] Coaching API
-- [ ] Memory API
+- [ ] Auth middleware (API key)
+- [ ] Observability (structured logging, tracing, metrics)
+- [ ] Test strategy (mock LLM, golden files)
 
-### Фаза 3: Интеграция с GUI
-- [ ] Переписать CLIRunner на вызов Go-бинарника
-- [ ] Убрать всю LLM-логику из GUI
-- [ ] Убрать RAGEngine из GUI
-- [ ] Убрать EmbeddingIndexer из GUI
-- [ ] Оставить только UI + вызовы бинарника
+### Фаза 2: Skill System
+- [ ] Skill loader (YAML configs)
+- [ ] Domain-specific prompts per skill
+- [ ] Pipeline config per skill
+- [ ] Memory schema per skill
+- [ ] Built-in skills: sales analysis, business coach, legal review
+- [ ] Skill CLI: `media2rag skills list/install/enable`
 
-### Фаза 4: Go-native экстракция (опционально)
+### Фаза 3: Coaching Engine
+- [ ] `docs/coaching.md` — полный дизайн
+- [ ] Phase management (discovery → clarity → planning → active → completed)
+- [ ] Action plan data model
+- [ ] Check-in reminders
+- [ ] Insight generation
+- [ ] Coaching API endpoints
+
+### Фаза 4: Marketplace MVP
+- [ ] Asset packaging format
+- [ ] Upload/download skills and knowledge bases
+- [ ] Licensing model
+- [ ] Marketplace UI (web)
+- [ ] Creator documentation
+
+### Фаза 5: Go-native Extraction (Optional)
+- [ ] PDF: pdfcpu / unipdf
+- [ ] EPUB: go-epub
+- [ ] Audio/Video: whisper.cpp CGo
+- [ ] Telegram: gotd native
 
 ---
 
@@ -238,8 +287,8 @@ media2rag/
 ├── internal/
 │   ├── extract/
 │   │   ├── extractor.go        // Extractor interface
-│   │   ├── pdf.go              // go-native PDF (v2)
-│   │   ├── python.go           // subprocess → Python
+│   │   ├── url.go              // rdrr-based URL extraction
+│   │   ├── local.go            // local file extraction
 │   │   └── types.go            // ExtractedContent
 │   ├── pipeline/
 │   │   ├── pipeline.go         // Pipeline orchestrator
@@ -258,6 +307,10 @@ media2rag/
 │   │   ├── session.go          // Coaching session
 │   │   ├── phases.go           // Phase management
 │   │   └── prompts.go          // Prompt templates
+│   ├── skills/
+│   │   ├── loader.go           // Skill YAML loader
+│   │   ├── registry.go         // Skill registry
+│   │   └── types.go            // Skill data model
 │   ├── memory/
 │   │   └── store.go            // SQLite-backed memory
 │   ├── llm/
@@ -265,7 +318,7 @@ media2rag/
 │   │   ├── ollama.go           // Ollama implementation
 │   │   └── openrouter.go       // OpenRouter implementation
 │   ├── store/
-│   │   └── lancedb.go          // LanceDB HTTP client
+│   │   └── qdrant.go           // Qdrant client
 │   ├── api/
 │   │   ├── router.go           // HTTP routes
 │   │   ├── process.go          // /api/process
@@ -274,8 +327,16 @@ media2rag/
 │   │   └── coach.go            // /api/coach
 │   ├── events/
 │   │   └── emitter.go          // JSON event emitter
-│   └── config/
-│       └── config.go           // Configuration
+│   ├── config/
+│   │   └── config.go           // Configuration
+│   └── observe/
+│       ├── log.go              // Structured logging
+│       ├── trace.go            // Request tracing
+│       └── metrics.go          // Metrics collection
+├── skills/                     // Built-in skills
+│   ├── sales-analysis/
+│   ├── business-coach/
+│   └── legal-review/
 ├── go.mod
 ├── go.sum
 └── Makefile
@@ -287,5 +348,6 @@ media2rag/
 
 - Текущая Python codebase: `~/dev/tools/transcripts`
 - Текущее GUI: `~/dev/tools/media2rag-gui`
-- LanceDB server: `lancedb_server.py` (Python, порт 54321)
-- Ollama: localhost:11434 (LLM), localhost:11435 (embeddings)
+- Qdrant: localhost:6334 (gRPC), localhost:6333 (HTTP)
+- Ollama: localhost:11434 (LLM + embeddings)
+- rdrr: `npx rdrr` (URL extraction)
