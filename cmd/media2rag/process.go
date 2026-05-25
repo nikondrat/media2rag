@@ -13,6 +13,8 @@ import (
 	"media2rag/internal/llm"
 	"media2rag/internal/model"
 	"media2rag/internal/pipeline"
+	"media2rag/internal/rag"
+	"media2rag/internal/service"
 	"media2rag/internal/workspace"
 )
 
@@ -161,6 +163,15 @@ var processCmd = &cobra.Command{
 			"title":       ragDoc.Metadata.Title,
 			"topics":      ragDoc.Metadata.Topics,
 		}})
+
+		embedClient := llm.NewOllamaClient(cfg.LLM.OllamaURL, cfg.LLM.EmbedModel)
+		qdrantSvc := service.NewQdrant(cfg.RAG.Qdrant)
+		if st, err := qdrantSvc.EnsureRunning(cmd.Context(), embedClient); err == nil {
+			indexer := rag.NewIndexer(st, embedClient)
+			_ = indexer.IndexDocument(cmd.Context(), wDoc.Hash, ragDoc.Markdown)
+			qdrantSvc.Stop(cmd.Context())
+		}
+
 		emitter.Done()
 		return nil
 	},

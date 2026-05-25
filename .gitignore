@@ -34,4 +34,4 @@ __pycache__/
 *.pyc
 
 # Binary
-media2rag
+/media2rag

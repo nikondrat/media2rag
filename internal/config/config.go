@@ -43,11 +43,26 @@ type ServerConfig struct {
 	Port int    `mapstructure:"port"`
 }
 
+type QdrantConfig struct {
+	Host          string `mapstructure:"host"`
+	Port          int    `mapstructure:"port"`
+	AutoStart     bool   `mapstructure:"auto_start"`
+	ContainerName string `mapstructure:"container_name"`
+	VectorDim     int    `mapstructure:"vector_dim"`
+}
+
+type RAGConfig struct {
+	Qdrant      QdrantConfig `mapstructure:"qdrant"`
+	RerankModel string       `mapstructure:"rerank_model"`
+	Rerank      bool         `mapstructure:"rerank"`
+}
+
 type Config struct {
 	LLM       LLMConfig       `mapstructure:"llm"`
 	Pipeline  PipelineConfig  `mapstructure:"pipeline"`
 	Workspace WorkspaceConfig `mapstructure:"workspace"`
 	Server    ServerConfig    `mapstructure:"server"`
+	RAG       RAGConfig       `mapstructure:"rag"`
 }
 
 func DefaultConfig() Config {
@@ -67,6 +82,17 @@ func DefaultConfig() Config {
 		Server: ServerConfig{
 			Host: "localhost",
 			Port: 8542,
+		},
+		RAG: RAGConfig{
+			Qdrant: QdrantConfig{
+				Host:          "localhost",
+				Port:          6334,
+				AutoStart:     true,
+				ContainerName: "media2rag-qdrant",
+				VectorDim:     1024,
+			},
+			RerankModel: "bge-reranker-v2-m3",
+			Rerank:      false,
 		},
 	}
 }
@@ -103,9 +129,14 @@ func Load(configPath string) (*Config, error) {
 		"MEDIA2RAG_LLM_OPENROUTER_KEY":  &cfg.LLM.OpenRouterKey,
 		"MEDIA2RAG_LLM_MODEL":           &cfg.LLM.Model,
 		"MEDIA2RAG_LLM_EMBED_MODEL":     &cfg.LLM.EmbedModel,
-		"MEDIA2RAG_LLM_TIMEOUT":         nil,
-		"MEDIA2RAG_SERVER_HOST":         &cfg.Server.Host,
-		"MEDIA2RAG_SERVER_PORT":         nil,
+		"MEDIA2RAG_LLM_TIMEOUT":          nil,
+		"MEDIA2RAG_SERVER_HOST":          &cfg.Server.Host,
+		"MEDIA2RAG_SERVER_PORT":          nil,
+		"MEDIA2RAG_QDRANT_HOST":          &cfg.RAG.Qdrant.Host,
+		"MEDIA2RAG_QDRANT_PORT":          nil,
+		"MEDIA2RAG_QDRANT_AUTO_START":    nil,
+		"MEDIA2RAG_QDRANT_CONTAINER":     &cfg.RAG.Qdrant.ContainerName,
+		"MEDIA2RAG_QDRANT_VECTOR_DIM":    nil,
 	}
 
 	for envKey, ptr := range envOverrides {
@@ -121,6 +152,15 @@ func Load(configPath string) (*Config, error) {
 	}
 	if timeoutStr, ok := os.LookupEnv("MEDIA2RAG_LLM_TIMEOUT"); ok {
 		fmt.Sscanf(timeoutStr, "%d", &cfg.LLM.Timeout)
+	}
+	if portStr, ok := os.LookupEnv("MEDIA2RAG_QDRANT_PORT"); ok {
+		fmt.Sscanf(portStr, "%d", &cfg.RAG.Qdrant.Port)
+	}
+	if autoStr, ok := os.LookupEnv("MEDIA2RAG_QDRANT_AUTO_START"); ok {
+		cfg.RAG.Qdrant.AutoStart = autoStr == "true" || autoStr == "1"
+	}
+	if dimStr, ok := os.LookupEnv("MEDIA2RAG_QDRANT_VECTOR_DIM"); ok {
+		fmt.Sscanf(dimStr, "%d", &cfg.RAG.Qdrant.VectorDim)
 	}
 
 	if err := cfg.Validate(); err != nil {
