@@ -165,18 +165,27 @@ type Message struct {
 }
 ```
 
-### Vector Store
+### Vector Store — Qdrant
+
+**Решение:** Qdrant (Rust-бинарник, HTTP/gRPC API).
+
+**Почему не LanceDB:**
+- LanceDB требует Python runtime (lancedb_server.py)
+- Qdrant — Rust-бинарник, запускается без Python
+- Go клиент: `github.com/qdrant/go-client`
+- Production-ready, используется в production
+
+**Интеграция:**
+- Qdrant запускается как отдельный процесс (systemd на VDS, brew на macOS)
+- Go общается через gRPC (qdrant/go-client)
+- Hybrid search: dense vectors + sparse vectors (BM25 через Qdrant's sparse indexing)
 
 ```go
 type VectorStore interface {
-    Add(ctx context.Context, table string, records []Record) error
-    AddParent(ctx context.Context, table string, records []Record) error
-    Search(ctx context.Context, req SearchRequest) ([]SearchResult, error)
-    HybridSearch(ctx context.Context, req HybridSearchRequest) ([]SearchResult, error)
-    BM25Search(ctx context.Context, req BM25SearchRequest) ([]SearchResult, error)
-    GetParent(ctx context.Context, parentID string) (*Chunk, error)
-    Delete(ctx context.Context, table string, documentID string) error
-    ListDocuments(ctx context.Context) ([]DocumentInfo, error)
+    UpsertPoints(ctx context.Context, collection string, points []Point) error
+    SearchPoints(ctx context.Context, req SearchRequest) ([]SearchResult, error)
+    DeletePoints(ctx context.Context, collection string, ids []string) error
+    ListCollections(ctx context.Context) ([]CollectionInfo, error)
 }
 ```
 
@@ -388,6 +397,12 @@ Loaded from:
 1. `.env` in current directory
 2. `~/.media2rag/config.yaml`
 3. CLI flags (highest priority)
+
+---
+
+### CTG Pipeline
+
+Pipeline спроектирован как цепочка маленьких, фокусных этапов. Каждый этап — отдельная функция с context, error handling, event emitter. Никаких "универсальных" промптов. Подробно: [ctg-pipeline.md](ctg-pipeline.md)
 
 ---
 
