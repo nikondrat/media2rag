@@ -263,6 +263,51 @@ Parent chunk content...
 ```
 
 ---
+
+## Dedup
+
+**Зачем:** multi-query возвращает одни и те же чанки несколько раз. Без дедупа контекст забивается дубликатами.
+
+### Как работает
+
+```go
+func Dedup(results []SearchResult) []SearchResult {
+    seen := map[string]bool{}
+    deduped := []SearchResult{}
+
+    for _, r := range results {
+        h := r.Payload["content_hash"].(string)
+        if seen[h] {
+            continue
+        }
+        seen[h] = true
+        deduped = append(deduped, r)
+    }
+
+    return deduped
+}
+```
+
+**До dedup** (5 результатов, 3 уникальных):
+```
+1. "HNSW m=16"         (из Q1)
+2. "ef_construct=200"  (из Q1)
+3. "HNSW m=16"         (из Q2) ← дубль
+4. "HNSW m=16"         (из Q3) ← дубль
+5. "установка Qdrant"  (из Q1)
+```
+
+**После dedup** (3 уникальных):
+```
+1. "HNSW m=16"
+2. "ef_construct=200"
+3. "установка Qdrant"
+```
+
+SHA-256 хеш хранится в payload точки Qdrant (поле `content_hash`), вычисляется при индексации.
+
+---
+
 ## Context Build (TBD)
 
 Format context from search results → LLM prompt.
