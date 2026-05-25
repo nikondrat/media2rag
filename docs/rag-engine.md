@@ -308,9 +308,69 @@ SHA-256 хеш хранится в payload точки Qdrant (поле `content_
 
 ---
 
-## Context Build (TBD)
+## Context Build
 
-Format context from search results → LLM prompt.
+**Зачем:** собрать найденные чанки в промпт для LLM с источниками, чтобы LLM цитировал откуда взял информацию.
+
+### Формат
+
+```go
+type ContextBuilder struct{}
+
+func (b *ContextBuilder) Build(query string, chunks []ParentChunk) []Message {
+    var sources []string
+    var contextLines []string
+
+    for i, chunk := range chunks {
+        ref := i + 1
+        source := fmt.Sprintf("[%d]: %s (%s, %s)",
+            ref, chunk.Title, chunk.DocType, chunk.Source)
+        sources = append(sources, source)
+
+        contextLines = append(contextLines,
+            fmt.Sprintf("Source [%d]:", ref),
+            fmt.Sprintf("> %s", chunk.Content),
+            "")
+    }
+
+    context := strings.Join(contextLines, "\n")
+    sourceBlock := strings.Join(sources, "\n")
+
+    system := fmt.Sprintf(`You are a helpful assistant. Answer based on the provided context.
+Cite sources using [1], [2], etc. If the context doesn't contain the answer, say so.
+Sources:
+%s`, sourceBlock)
+
+    return []Message{
+        {Role: "system", Content: system},
+        {Role: "system", Content: "Context:\n" + context},
+        {Role: "user", Content: query},
+    }
+}
+```
+
+### Пример
+
+**Контекст:**
+```
+--- Sources ---
+[1]: "Как масштабировать бизнес" (video, https://youtube.com/...)
+[2]: "Скрипты продаж" (markdown, ./scripts.md)
+
+--- Context ---
+Source [1]:
+> Ключевой принцип масштабирования — делегирование.
+> Невозможно вырасти, если ты делаешь всё сам.
+
+Source [2]:
+> При обработке возражения "дорого" используйте технику "Сэндвич".
+```
+
+**Ответ LLM:**
+```
+Основной принцип масштабирования — делегирование [1].
+Для обработки возражений используйте технику "Сэндвич" [2].
+```
 
 ---
 
