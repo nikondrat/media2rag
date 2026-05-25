@@ -118,11 +118,81 @@ rag:
 
 ---
 
-## Post-processing (TBD)
+## Reranking
 
-- Parent Lookup
-- Reranking
-- Dedup
+**Зачем:** hybrid search находит 20-50 чанков, но не все релевантны вопросу. Reranker заново оценивает каждый чанк и отсеивает нерелевантные.
+
+### Принцип
+
+Cross-encoder модель получает на вход пару (вопрос + чанк) и возвращает score релевантности:
+
+```
+Вопрос: "как настроить HNSW"
+
+До реранжа:                  После:
+1. история Qdrant (0.89)     1. параметры HNSW (0.95)  ← реально релевантно
+2. параметры HNSW (0.72)     2. настройка индекса (0.82)
+3. установка Qdrant (0.68)   3. история Qdrant (0.12)   ← dense ошибся
+```
+
+### Реализация
+
+Ollama поддерживает cross-encoder через `/api/rerank`:
+
+```go
+type Reranker struct {
+    model   string  // bge-reranker-v2-m3
+    ollama  *OllamaClient
+}
+
+func (r *Reranker) Rerank(ctx context.Context, query string, chunks []Chunk, topK int) ([]ScoredChunk, error) {
+    for _, chunk := range chunks {
+        score, err := r.ollama.Rerank(ctx, r.model, query, chunk.Content)
+        if err != nil {
+            return nil, err
+        }
+        scored = append(scored, ScoredChunk{Chunk: chunk, Score: score})
+    }
+
+    sort.Slice(scored, func(i, j int) bool {
+        return scored[i].Score > scored[j].Score
+    })
+
+    return scored[:min(topK, len(scored))], nil
+}
+```
+
+**Запрос к Ollama:**
+```
+POST /api/rerank
+{
+  "model": "bge-reranker-v2-m3",
+  "query": "...",
+  "documents": ["..."],
+  "limit": 5
+}
+```
+
+### Модели
+
+| Модель | Размер | Языки | Скорость |
+|--------|--------|-------|----------|
+| bge-reranker-v2-m3 | 1.2GB | Русский, английский, китайский | Быстрая |
+| ms-marco-MiniLM-L-12-v2 | 500MB | Английский | Очень быстрая |
+| jina-reranker-v2-base | 2.5GB | Мультиязычная (50+) | Средняя |
+
+### Конфиг
+
+```yaml
+rag:
+  reranker:
+    enabled: true
+    model: bge-reranker-v2-m3     # любая cross-encoder
+    top_k: 5                        # сколько оставить
+    search_factor: 2                # сколько взять из поиска до реранжа (topK * factor)
+```
+
+Reranker не хардкодит язык — модель просто оценивает релевантность на том языке, на котором обучалась.
 
 ---
 
