@@ -22,9 +22,15 @@ type LLMConfig struct {
 }
 
 type PipelineConfig struct {
-	MaxTokens    int `mapstructure:"max_tokens"`
-	ChunkSize    int `mapstructure:"chunk_size"`
-	ChunkOverlap int `mapstructure:"chunk_overlap"`
+	MaxTokens           int  `mapstructure:"max_tokens"`
+	ChunkSize           int  `mapstructure:"chunk_size"`
+	ChunkOverlap        int  `mapstructure:"chunk_overlap"`
+	ExtractClaims       *bool `mapstructure:"extract_claims"`
+	ExtractMentalModels *bool `mapstructure:"extract_mental_models"`
+	ExtractKeyTerms     *bool `mapstructure:"extract_key_terms"`
+	ExtractCoreThesis   *bool `mapstructure:"extract_core_thesis"`
+	ExtractTakeaways    *bool `mapstructure:"extract_takeaways"`
+	HolisticAnalysis    *bool `mapstructure:"holistic_analysis"`
 }
 
 type WorkspaceConfig struct {

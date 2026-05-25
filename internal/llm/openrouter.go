@@ -184,6 +184,34 @@ func (c *OpenRouterClient) StreamChat(ctx context.Context, req model.ChatRequest
 	return ch, nil
 }
 
+func (c *OpenRouterClient) ChatAndParse(ctx context.Context, req model.ChatRequest) ([]model.TypedBlock, error) {
+	resp, err := c.Chat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOutput(resp.Message.Content)
+}
+
+func (c *OpenRouterClient) StreamAndParse(ctx context.Context, req model.ChatRequest) (<-chan model.StreamDelta, chan []model.TypedBlock, error) {
+	deltaCh, err := c.StreamChat(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resultCh := make(chan []model.TypedBlock, 1)
+	go func() {
+		defer close(resultCh)
+		var sb strings.Builder
+		for delta := range deltaCh {
+			sb.WriteString(delta.Content)
+		}
+		blocks, _ := ParseOutput(sb.String())
+		resultCh <- blocks
+	}()
+
+	return deltaCh, resultCh, nil
+}
+
 func (c *OpenRouterClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	return nil, fmt.Errorf("embed not supported by OpenRouter")
 }

@@ -103,6 +103,12 @@ type MemoryEntry struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+type TypedBlock struct {
+	Type    string            `json:"type"`
+	Params  map[string]string `json:"params,omitempty"`
+	Content string            `json:"content"`
+}
+
 var (
 	ErrExtractionFailed = errors.New("extraction failed")
 	ErrLLMUnavailable   = errors.New("LLM unavailable")

@@ -55,6 +55,28 @@ func (f *fallbackClient) StreamChat(ctx context.Context, req model.ChatRequest) 
 	return resp, nil
 }
 
+func (f *fallbackClient) ChatAndParse(ctx context.Context, req model.ChatRequest) ([]model.TypedBlock, error) {
+	resp, err := f.primary.ChatAndParse(ctx, req)
+	if err != nil {
+		if errors.Is(err, model.ErrLLMUnavailable) {
+			return f.fallback.ChatAndParse(ctx, req)
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (f *fallbackClient) StreamAndParse(ctx context.Context, req model.ChatRequest) (<-chan model.StreamDelta, chan []model.TypedBlock, error) {
+	resp, result, err := f.primary.StreamAndParse(ctx, req)
+	if err != nil {
+		if errors.Is(err, model.ErrLLMUnavailable) {
+			return f.fallback.StreamAndParse(ctx, req)
+		}
+		return nil, nil, err
+	}
+	return resp, result, nil
+}
+
 func (f *fallbackClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	resp, err := f.primary.Embed(ctx, text)
 	if err != nil {

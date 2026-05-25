@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"media2rag/internal/config"
+	"media2rag/internal/extract"
 	"media2rag/internal/llm"
 )
 
@@ -16,6 +17,7 @@ var (
 	jsonOutput bool
 	cfg        *config.Config
 	llmClient  llm.LLMClient
+	extractorRegistry *extract.Registry
 )
 
 var rootCmd = &cobra.Command{
@@ -56,6 +58,10 @@ into RAG-ready Markdown with structured metadata.`,
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+
+	extractorRegistry = extract.NewRegistry()
+	extractorRegistry.Register(&extract.URLExtractor{})
+	extractorRegistry.Register(&extract.LocalFileExtractor{})
 }
 
 func main() {
