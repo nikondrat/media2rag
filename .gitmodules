@@ -1,0 +1,4 @@
+[submodule "dashboard"]
+	path = dashboard
+	url = git@github.com:nikondrat/media2rag-dashboard.git
+	branch = master
