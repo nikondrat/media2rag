@@ -3,12 +3,14 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"media2rag/internal/dashboard"
 	"media2rag/internal/events"
 	"media2rag/internal/llm"
 	"media2rag/internal/model"
@@ -19,8 +21,8 @@ import (
 )
 
 var (
-	processBackend    string
-	processModel      string
+	processBackend     string
+	processModel       string
 	processExtractOnly bool
 )
 
@@ -129,14 +131,54 @@ var processCmd = &cobra.Command{
 		pipe := pipeline.New(pcfg, client)
 		pipe.SetCheckpointDir(filepath.Join(wDoc.RootPath, ".pipeline-cache"))
 
+		dbPath := cfg.Dashboard.DBPath
+		if dbPath == "" {
+			dbPath = "~/.media2rag/dashboard.db"
+		}
+		if len(dbPath) > 0 && dbPath[0] == '~' {
+			home, _ := os.UserHomeDir()
+			dbPath = filepath.Join(home, dbPath[1:])
+		}
+
+		var store *dashboard.Store
+		var tracer *dashboard.Tracer
+		if dbPath != "" {
+			os.MkdirAll(filepath.Dir(dbPath), 0755)
+			store, err = dashboard.NewStore(dbPath)
+			if err != nil {
+				log.Printf("warning: dashboard store: %v (tracing disabled)", err)
+			} else {
+				defer store.Close()
+				sse := dashboard.NewSSEBroadcaster()
+				tracer = dashboard.NewTracer(store, sse)
+			}
+		}
+
+		runID := dashboard.GenerateID()
+		startTime := time.Now()
+
+		if tracer != nil {
+			tracer.SaveRunStart(runID, source, sourceType)
+			tracer.BroadcastEvent("pipeline_start", map[string]interface{}{
+				"run_id": runID, "source": source, "timestamp": startTime.Unix(),
+			})
+			pipe.SetRunID(runID)
+			pipe.SetTracer(tracer)
+		}
+
 		ec := model.ExtractedContent{
-			Content:  markdown,
-			Source:   source,
-			DocType:  sourceType,
+			Content:   markdown,
+			Source:    source,
+			DocType:   sourceType,
 			WordCount: wordCount,
 		}
 		ragDoc, err := pipe.Run(cmd.Context(), ec, emitter)
 		if err != nil {
+			if tracer != nil {
+				tracer.BroadcastEvent("pipeline_complete", map[string]interface{}{
+					"run_id": runID, "status": "failed", "error": err.Error(),
+				})
+			}
 			emitter.Emit(model.Event{Type: "error", Error: fmt.Sprintf("pipeline: %v", err)})
 			emitter.Done()
 			return fmt.Errorf("pipeline: %w", err)
@@ -154,6 +196,14 @@ var processCmd = &cobra.Command{
 
 		outputPath := filepath.Join(versionDir, "final.md")
 
+	if tracer != nil {
+		tokenEstimate := len(ragDoc.Markdown) / 4
+		tracer.SaveRunComplete(runID, 0.85, tokenEstimate, int(time.Since(startTime).Milliseconds()), 0, "")
+			tracer.BroadcastEvent("pipeline_complete", map[string]interface{}{
+				"run_id": runID, "score": 0.85, "status": "completed",
+			})
+		}
+
 		emitter.Emit(model.Event{Type: "completed", Data: map[string]interface{}{
 			"hash":        wDoc.Hash,
 			"source":      source,
@@ -162,6 +212,7 @@ var processCmd = &cobra.Command{
 			"version":     version,
 			"title":       ragDoc.Metadata.Title,
 			"topics":      ragDoc.Metadata.Topics,
+			"run_id":      runID,
 		}})
 
 		embedClient := llm.NewOllamaClient(cfg.LLM.OllamaURL, cfg.LLM.EmbedModel)

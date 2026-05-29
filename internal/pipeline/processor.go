@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"media2rag/internal/events"
 	"media2rag/internal/model"
@@ -148,15 +149,23 @@ func (p *Pipeline) processSingle(ctx context.Context, text string) (ChunkResult,
 
 			callCtx, cancel := p.timeoutCtx(ctx)
 			defer cancel()
+			start := time.Now()
 			resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
 				Messages: []model.Message{
 					{Role: "system", Content: task.prompt},
 					{Role: "user", Content: text},
 				},
 			})
+			latency := int(time.Since(start).Milliseconds())
 			if err != nil {
+				if p.tracer != nil && p.runID != "" {
+					p.tracer.SaveLLMCall(p.runID, p.model, "process_"+task.id, len(text)/4, 0, latency, 0, task.prompt, "", "error", err.Error())
+				}
 				errCh <- err
 				return
+			}
+			if p.tracer != nil && p.runID != "" {
+				p.tracer.SaveLLMCall(p.runID, p.model, "process_"+task.id, len(text)/4, len(resp.Message.Content)/4, latency, 0, task.prompt, resp.Message.Content, "success", "")
 			}
 
 			parsed := parsePromptResult(task.id, resp.Message.Content)

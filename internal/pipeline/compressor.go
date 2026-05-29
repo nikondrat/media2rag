@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"media2rag/internal/events"
 	"media2rag/internal/model"
@@ -66,14 +67,22 @@ func (p *Pipeline) cleanLarge(ctx context.Context, text string, emitter events.E
 func (p *Pipeline) cleanSingle(ctx context.Context, text string) (string, error) {
 	callCtx, cancel := p.timeoutCtx(ctx)
 	defer cancel()
+	start := time.Now()
 	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
 		Messages: []model.Message{
 			{Role: "system", Content: cleaningPrompt},
 			{Role: "user", Content: text},
 		},
 	})
+	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
+		if p.tracer != nil && p.runID != "" {
+			p.tracer.SaveLLMCall(p.runID, p.model, "compress", len(text)/4, 0, latency, 0, cleaningPrompt, "", "error", err.Error())
+		}
 		return "", err
+	}
+	if p.tracer != nil && p.runID != "" {
+		p.tracer.SaveLLMCall(p.runID, p.model, "compress", len(text)/4, len(resp.Message.Content)/4, latency, 0, cleaningPrompt, resp.Message.Content, "success", "")
 	}
 	return resp.Message.Content, nil
 }

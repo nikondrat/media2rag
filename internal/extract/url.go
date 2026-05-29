@@ -43,10 +43,11 @@ func (u *URLExtractor) Extract(ctx context.Context, path string) (string, error)
 }
 
 type rdrrResponse struct {
-	Title    string            `json:"title"`
-	Content  string            `json:"content"`
-	Type     string            `json:"type"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Title       string            `json:"title"`
+	Content     string            `json:"content"`
+	Description string            `json:"description"`
+	Type        string            `json:"type"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 func parseRdrrJSON(data []byte) (string, error) {
@@ -54,10 +55,47 @@ func parseRdrrJSON(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return "", err
 	}
-	if resp.Content == "" {
-		return "", fmt.Errorf("rdrr response has empty content field")
+	return pickContent(resp.Content, resp.Description), nil
+}
+
+func wordCount(s string) int {
+	if s == "" {
+		return 0
 	}
-	return resp.Content, nil
+	count := 1
+	inWord := false
+	for _, c := range s {
+		if c == ' ' || c == '\n' || c == '\t' {
+			inWord = false
+		} else {
+			if !inWord {
+				count++
+				inWord = true
+			}
+		}
+	}
+	return count - 1
+}
+
+func pickContent(content, description string) string {
+	if content == "" && description == "" {
+		return ""
+	}
+	if description == "" {
+		return content
+	}
+	if content == "" {
+		return description
+	}
+
+	contentWords := wordCount(content)
+	descWords := wordCount(description)
+
+	threshold := descWords * 30 / 100
+	if contentWords < threshold {
+		return description
+	}
+	return content
 }
 
 func isNotFound(err error) bool {

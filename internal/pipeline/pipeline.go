@@ -87,6 +87,9 @@ type Pipeline struct {
 	docType       string
 	author        string
 	language      string
+	runID         string
+	tracer        Tracer
+	model         string
 }
 
 func New(cfg PipelineConfig, client llm.LLMClient) *Pipeline {
@@ -102,11 +105,27 @@ func New(cfg PipelineConfig, client llm.LLMClient) *Pipeline {
 	if cfg.LLMTimeout <= 0 {
 		cfg.LLMTimeout = 120 * time.Second
 	}
-	return &Pipeline{config: cfg, llmClient: client}
+
+	modelName := ""
+	if client != nil {
+		if o, ok := client.(interface{ Model() string }); ok {
+			modelName = o.Model()
+		}
+	}
+
+	return &Pipeline{config: cfg, llmClient: client, model: modelName}
 }
 
 func (p *Pipeline) SetCheckpointDir(dir string) {
 	p.checkpointDir = dir
+}
+
+func (p *Pipeline) SetTracer(t Tracer) {
+	p.tracer = t
+}
+
+func (p *Pipeline) SetRunID(id string) {
+	p.runID = id
 }
 
 func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter events.EventEmitter) (*model.RAGDocument, error) {
@@ -117,23 +136,79 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 
 	emitter.Emit(model.Event{Type: EventPipelineStart, Data: map[string]int{"text_length": len(ec.Content)}})
 
+	stageScore := 0.95
+	errStr := ""
+	totalTokens := 0
+
 	emitter.Emit(model.Event{Type: EventCompressionStart})
+	startCompress := time.Now()
 	cleaned, err := p.compress(ctx, ec.Content, emitter)
+	compressMs := int(time.Since(startCompress).Milliseconds())
 	if err != nil {
 		return nil, fmt.Errorf("compressor: %w", err)
 	}
 	emitter.Emit(model.Event{Type: EventCompressionDone, Data: map[string]int{"cleaned_length": len(cleaned)}})
+	totalTokens += len(cleaned) / 4
+
+	if p.tracer != nil && p.runID != "" {
+		p.tracer.SaveStage(TraceEntry{
+			RunID: p.runID, StageName: "compress", Seq: 1,
+			Prompt: cleaningPrompt, Response: cleaned,
+			TokensIn: len(ec.Content) / 4, TokensOut: len(cleaned) / 4,
+			LatencyMs: compressMs, Score: stageScore, Model: p.model,
+		})
+		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
+			"run_id": p.runID, "stage": "compress", "score": stageScore, "latency_ms": compressMs,
+		})
+	}
 
 	emitter.Emit(model.Event{Type: EventSplitting})
+	startSplit := time.Now()
 	chunks := p.splitText(cleaned)
+	splitMs := int(time.Since(startSplit).Milliseconds())
 	emitter.Emit(model.Event{Type: EventSplitDone, Data: map[string]int{"chunks": len(chunks)}})
 
+	if p.tracer != nil && p.runID != "" {
+		p.tracer.SaveStage(TraceEntry{
+			RunID: p.runID, StageName: "split", Seq: 2,
+			TokensIn: len(cleaned) / 4, TokensOut: 0,
+			LatencyMs: splitMs, Score: 1.0, Model: "",
+		})
+		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
+			"run_id": p.runID, "stage": "split", "score": 1.0, "latency_ms": splitMs,
+		})
+	}
+
 	emitter.Emit(model.Event{Type: EventProcessingStart, Data: map[string]int{"total": len(chunks)}})
+	startProcess := time.Now()
 	results, err := p.processChunks(ctx, chunks, emitter)
+	processMs := int(time.Since(startProcess).Milliseconds())
 	if err != nil {
+		errStr = err.Error()
+		if p.tracer != nil && p.runID != "" {
+			p.tracer.SaveStage(TraceEntry{
+				RunID: p.runID, StageName: "process", Seq: 3,
+				Prompt: chunkPrompt, Response: errStr,
+				TokensIn: len(cleaned) / 4, TokensOut: 0,
+				LatencyMs: processMs, Score: 0, Model: p.model, Error: errStr,
+			})
+		}
 		return nil, fmt.Errorf("processor: %w", err)
 	}
 	emitter.Emit(model.Event{Type: EventProcessingDone})
+
+	processResp := fmt.Sprintf("processed %d chunks, %d results", len(chunks), len(results))
+	if p.tracer != nil && p.runID != "" {
+		p.tracer.SaveStage(TraceEntry{
+			RunID: p.runID, StageName: "process", Seq: 3,
+			Prompt: chunkPrompt, Response: processResp,
+			TokensIn: len(cleaned) / 4, TokensOut: totalTokens,
+			LatencyMs: processMs, Score: stageScore, Model: p.model,
+		})
+		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
+			"run_id": p.runID, "stage": "process", "score": stageScore, "latency_ms": processMs,
+		})
+	}
 
 	var holistic struct {
 		coreThesis string
@@ -141,14 +216,34 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 	}
 	if p.config.HolisticAnalysis {
 		emitter.Emit(model.Event{Type: EventHolisticAnalysis})
+		startHolistic := time.Now()
 		holistic.coreThesis, holistic.domains, err = p.holisticAnalysis(ctx, cleaned)
+		holisticMs := int(time.Since(startHolistic).Milliseconds())
 		if err != nil {
+			if p.tracer != nil && p.runID != "" {
+				p.tracer.SaveLLMCall(p.runID, p.model, "holistic", len(cleaned)/4, 0, holisticMs, 0, holisticPrompt, "", "error", err.Error())
+			}
 			return nil, fmt.Errorf("holistic: %w", err)
 		}
 		emitter.Emit(model.Event{Type: EventHolisticDone})
+
+		if p.tracer != nil && p.runID != "" {
+			holisticResp := fmt.Sprintf("core_thesis: %s\ndomains: %s", holistic.coreThesis, strings.Join(holistic.domains, ", "))
+			p.tracer.SaveLLMCall(p.runID, p.model, "holistic", len(cleaned)/4, len(holisticResp)/4, holisticMs, 0, holisticPrompt, holisticResp, "success", "")
+			p.tracer.SaveStage(TraceEntry{
+				RunID: p.runID, StageName: "holistic", Seq: 4,
+				Prompt: holisticPrompt, Response: holisticResp,
+				TokensIn: len(cleaned) / 4, TokensOut: 0,
+				LatencyMs: holisticMs, Score: 1.0, Model: p.model,
+			})
+			p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
+				"run_id": p.runID, "stage": "holistic", "score": 1.0, "latency_ms": holisticMs,
+			})
+		}
 	}
 
 	emitter.Emit(model.Event{Type: EventAssembling})
+	startAssemble := time.Now()
 	doc := assemble(results, cleaned, assembleOpts{
 		source:     p.source,
 		docType:    p.docType,
@@ -157,6 +252,18 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 		coreThesis: holistic.coreThesis,
 		domains:    holistic.domains,
 	})
+	assembleMs := int(time.Since(startAssemble).Milliseconds())
+
+	if p.tracer != nil && p.runID != "" {
+		p.tracer.SaveStage(TraceEntry{
+			RunID: p.runID, StageName: "assemble", Seq: 5,
+			TokensIn: totalTokens, TokensOut: len(doc.Markdown) / 4,
+			LatencyMs: assembleMs, Score: 1.0, Model: "",
+		})
+		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
+			"run_id": p.runID, "stage": "assemble", "score": 1.0, "latency_ms": assembleMs,
+		})
+	}
 
 	emitter.Emit(model.Event{Type: EventPipelineCompleted, Data: map[string]interface{}{
 		"title":      doc.Metadata.Title,

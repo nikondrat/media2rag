@@ -57,12 +57,40 @@ type RAGConfig struct {
 	Rerank      bool         `mapstructure:"rerank"`
 }
 
+type JudgeConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	Model   string `mapstructure:"model"`
+}
+
+type EmbedCheckConfig struct {
+	Enabled            bool    `mapstructure:"enabled"`
+	Model              string  `mapstructure:"model"`
+	SampleSize         int     `mapstructure:"sample_size"`
+	SimilarityThreshold float64 `mapstructure:"similarity_threshold"`
+	RelevanceThreshold  float64 `mapstructure:"relevance_threshold"`
+}
+
+type DashboardConfig struct {
+	DBPath string `mapstructure:"db_path"`
+}
+
+type LLMFallbackConfig struct {
+	PipelineModel string   `mapstructure:"pipeline_model"`
+	PipelineChain []string `mapstructure:"pipeline_chain"`
+	JudgeModel    string   `mapstructure:"judge_model"`
+	JudgeChain    []string `mapstructure:"judge_chain"`
+}
+
 type Config struct {
-	LLM       LLMConfig       `mapstructure:"llm"`
-	Pipeline  PipelineConfig  `mapstructure:"pipeline"`
-	Workspace WorkspaceConfig `mapstructure:"workspace"`
-	Server    ServerConfig    `mapstructure:"server"`
-	RAG       RAGConfig       `mapstructure:"rag"`
+	LLM        LLMConfig        `mapstructure:"llm"`
+	LLMFallback LLMFallbackConfig `mapstructure:"llm_fallback"`
+	Pipeline   PipelineConfig   `mapstructure:"pipeline"`
+	Workspace  WorkspaceConfig  `mapstructure:"workspace"`
+	Server     ServerConfig     `mapstructure:"server"`
+	RAG        RAGConfig        `mapstructure:"rag"`
+	Judge      JudgeConfig      `mapstructure:"judge"`
+	EmbedCheck EmbedCheckConfig `mapstructure:"embed_check"`
+	Dashboard  DashboardConfig  `mapstructure:"dashboard"`
 }
 
 func DefaultConfig() Config {
@@ -70,9 +98,15 @@ func DefaultConfig() Config {
 		LLM: LLMConfig{
 			DefaultBackend: "ollama",
 			OllamaURL:      "http://localhost:11434",
-			Model:          "llama3.2",
-			EmbedModel:     "nomic-embed-text",
+			Model:          "gemma4",
+			EmbedModel:     "qwen3-embedding:0.6b",
 			Timeout:        30,
+		},
+		LLMFallback: LLMFallbackConfig{
+			PipelineModel: "openrouter/free",
+			PipelineChain: []string{"openrouter/free", "deepseek/deepseek-v4-flash:free", "mistralai/mistral-nemo"},
+			JudgeModel:    "nvidia/nemotron-3-super-120b-a12b:free",
+			JudgeChain:    []string{"nvidia/nemotron-3-super-120b-a12b:free", "qwen/qwen3-coder:free", "qwen/qwen3.5-9b"},
 		},
 		Pipeline: PipelineConfig{
 			MaxTokens:    4096,
@@ -93,6 +127,20 @@ func DefaultConfig() Config {
 			},
 			RerankModel: "bge-reranker-v2-m3",
 			Rerank:      false,
+		},
+		Judge: JudgeConfig{
+			Enabled: true,
+			Model:   "nvidia/nemotron-3-super-120b-a12b:free",
+		},
+		EmbedCheck: EmbedCheckConfig{
+			Enabled:             true,
+			Model:               "gemma4",
+			SampleSize:          5,
+			SimilarityThreshold: 0.6,
+			RelevanceThreshold:  0.7,
+		},
+		Dashboard: DashboardConfig{
+			DBPath: "~/.media2rag/dashboard.db",
 		},
 	}
 }

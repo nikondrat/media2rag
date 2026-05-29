@@ -33,5 +33,8 @@ output/
 __pycache__/
 *.pyc
 
+# mcp
+.playwright-mcp/
+
 # Binary
 /media2rag

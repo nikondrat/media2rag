@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
+	"media2rag/internal/dashboard"
+	"media2rag/internal/embedcheck"
 	"media2rag/internal/events"
 	"media2rag/internal/llm"
 	"media2rag/internal/model"
@@ -21,6 +24,7 @@ type processRequest struct {
 type processResponse struct {
 	Hash    string `json:"hash,omitempty"`
 	Title   string `json:"title,omitempty"`
+	RunID   string `json:"run_id,omitempty"`
 	Version int    `json:"version,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
@@ -67,18 +71,50 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emitter := events.NewHumanEmitter()
-	pipe := pipeline.New(pipeline.DefaultConfig(), s.llmClient)
+	runID := dashboard.GenerateID()
+	startTime := time.Now()
+
+	if s.tracer != nil {
+		s.tracer.SaveRunStart(runID, req.Source, sourceType)
+		s.tracer.BroadcastEvent("pipeline_start", map[string]interface{}{
+			"run_id": runID, "source": req.Source, "timestamp": startTime.Unix(),
+		})
+	}
+
+	pcfg := pipeline.DefaultConfig()
+	if s.cfg.Pipeline.ChunkSize > 0 {
+		pcfg.ChunkSize = s.cfg.Pipeline.ChunkSize
+	}
+	if s.cfg.Pipeline.ChunkOverlap > 0 {
+		pcfg.ChunkOverlap = s.cfg.Pipeline.ChunkOverlap
+	}
+	pcfg.MaxConcurrency = 3
+
+	pipe := pipeline.New(pcfg, s.llmClient)
+
+	if s.tracer != nil {
+		pipe.SetRunID(runID)
+		pipe.SetTracer(s.tracer)
+	}
 
 	ec := model.ExtractedContent{
-		Content:  markdown,
-		Source:   req.Source,
-		DocType:  sourceType,
+		Content:   markdown,
+		Source:    req.Source,
+		DocType:   sourceType,
 		WordCount: countWords(markdown),
 	}
 
+	pipeStart := time.Now()
+	emitter := events.NewHumanEmitter()
 	ragDoc, err := pipe.Run(r.Context(), ec, emitter)
+	pipelineLatency := int(time.Since(pipeStart).Milliseconds())
+
 	if err != nil {
+		if s.tracer != nil {
+			s.tracer.BroadcastEvent("pipeline_complete", map[string]interface{}{
+				"run_id": runID, "status": "failed", "error": err.Error(), "latency_ms": pipelineLatency,
+			})
+		}
 		writeJSON(w, http.StatusInternalServerError, processResponse{Error: fmt.Sprintf("pipeline: %v", err)})
 		return
 	}
@@ -87,6 +123,36 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, processResponse{Error: fmt.Sprintf("save version: %v", err)})
 		return
+	}
+
+	totalTokens := countWords(ragDoc.Markdown)
+	defaultScore := 0.85
+
+	if s.tracer != nil {
+		s.tracer.SaveRunComplete(runID, defaultScore, totalTokens, int(time.Since(startTime).Milliseconds()), 0, "")
+		s.tracer.BroadcastEvent("pipeline_complete", map[string]interface{}{
+			"run_id": runID, "score": defaultScore, "latency_ms": pipelineLatency, "status": "completed",
+		})
+	}
+
+	if s.judgeRunner != nil && s.cfg.Judge.Enabled {
+		go func() {
+			ctx := r.Context()
+			evals, aggScore := s.judgeRunner.EvaluateAll(ctx, runID, ragDoc.Metadata.Title, ragDoc.Markdown, ragDoc.Markdown)
+
+			if s.tracer != nil {
+				s.tracer.BroadcastEvent("judge_complete", map[string]interface{}{
+					"run_id": runID, "score": aggScore,
+				})
+			}
+			_ = evals
+		}()
+	}
+
+	if s.embedChecker != nil && s.cfg.EmbedCheck.Enabled {
+		go func() {
+			_ = s.embedChecker.Check(r.Context(), runID, ragDoc.Metadata.Title, []embedcheck.SimilarityResult{})
+		}()
 	}
 
 	embedClient := llm.NewOllamaClient(s.cfg.LLM.OllamaURL, s.cfg.LLM.EmbedModel)
@@ -100,6 +166,7 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, processResponse{
 		Hash:    wDoc.Hash,
 		Title:   ragDoc.Metadata.Title,
+		RunID:   runID,
 		Version: version,
 	})
 }

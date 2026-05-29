@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -12,7 +13,10 @@ import (
 	"time"
 
 	"media2rag/internal/config"
+	"media2rag/internal/dashboard"
+	"media2rag/internal/embedcheck"
 	"media2rag/internal/extract"
+	"media2rag/internal/judge"
 	"media2rag/internal/llm"
 )
 
@@ -22,6 +26,12 @@ type Server struct {
 	workspaceDir      string
 	extractorRegistry *extract.Registry
 	apiKey            string
+	spaFS             fs.FS
+	store             *dashboard.Store
+	tracer            *dashboard.Tracer
+	sse               *dashboard.SSEBroadcaster
+	judgeRunner       *judge.Runner
+	embedChecker      *embedcheck.Runner
 }
 
 type Options struct {
@@ -30,6 +40,12 @@ type Options struct {
 	WorkspaceDir      string
 	ExtractorRegistry *extract.Registry
 	APIKey            string
+	DashboardFS       fs.FS
+	Store             *dashboard.Store
+	Tracer            *dashboard.Tracer
+	SSE               *dashboard.SSEBroadcaster
+	JudgeRunner       *judge.Runner
+	EmbedChecker      *embedcheck.Runner
 }
 
 func New(opts Options) *Server {
@@ -39,6 +55,12 @@ func New(opts Options) *Server {
 		workspaceDir:      opts.WorkspaceDir,
 		extractorRegistry: opts.ExtractorRegistry,
 		apiKey:            opts.APIKey,
+		spaFS:             opts.DashboardFS,
+		store:             opts.Store,
+		tracer:            opts.Tracer,
+		sse:               opts.SSE,
+		judgeRunner:       opts.JudgeRunner,
+		embedChecker:      opts.EmbedChecker,
 	}
 }
 
@@ -48,6 +70,24 @@ func (s *Server) Start(ctx context.Context, host string, port int) error {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/process", s.handleProcess)
 	mux.HandleFunc("POST /api/query", s.handleQuery)
+
+	mux.HandleFunc("GET /api/debug/overview", s.handleDebugOverview)
+	mux.HandleFunc("GET /api/debug/timeline", s.handleDebugOverview)
+	mux.HandleFunc("GET /api/debug/pipeline", s.handleDebugPipelineList)
+	mux.HandleFunc("GET /api/debug/pipeline/{id}", s.handleDebugPipelineDetail)
+	mux.HandleFunc("GET /api/debug/logs", s.handleDebugLogsList)
+	mux.HandleFunc("GET /api/debug/logs/{id}", s.handleDebugLogDetail)
+	mux.HandleFunc("GET /api/debug/metrics", s.handleDebugMetrics)
+	mux.HandleFunc("GET /api/debug/documents", s.handleDebugDocuments)
+	mux.HandleFunc("GET /api/debug/status", s.handleDebugStatus)
+	mux.HandleFunc("GET /api/debug/config", s.handleDebugConfig)
+	mux.HandleFunc("POST /api/debug/reprocess/{id}", s.handleDebugReprocess)
+	mux.HandleFunc("GET /api/debug/live", s.handleDebugLiveSSE)
+	mux.HandleFunc("GET /api/debug/embeddings", s.handleDebugEmbeddings)
+	mux.HandleFunc("GET /api/debug/feedback", s.handleDebugFeedbackList)
+	mux.HandleFunc("POST /api/debug/feedback", s.handleDebugFeedbackSubmit)
+	mux.HandleFunc("GET /api/debug/regressions", s.handleDebugRegressions)
+	mux.HandleFunc("GET /{path...}", s.handleDebugSPA)
 
 	var handler http.Handler = mux
 	handler = recoveryMiddleware(handler)
@@ -86,6 +126,10 @@ func (s *Server) Start(ctx context.Context, host string, port int) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	if s.store != nil {
+		s.store.Close()
+	}
 
 	return server.Shutdown(shutdownCtx)
 }
