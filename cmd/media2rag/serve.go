@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
+
+	"media2rag/internal/api"
 )
 
 var (
@@ -23,8 +23,15 @@ var serveCmd = &cobra.Command{
 				port = cfg.Server.Port
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "server not yet implemented (would start on %s:%d)\n", host, port)
-		return nil
+
+		srv := api.New(api.Options{
+			Config:            cfg,
+			LLMClient:         llmClient,
+			WorkspaceDir:      cfg.Workspace.DataDir,
+			ExtractorRegistry: extractorRegistry,
+		})
+
+		return srv.Start(cmd.Context(), host, port)
 	},
 }
 

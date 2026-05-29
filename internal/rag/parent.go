@@ -8,10 +8,10 @@ import (
 )
 
 type ParentLookup struct {
-	st *store.Store
+	st store.VectorStore
 }
 
-func NewParentLookup(st *store.Store) *ParentLookup {
+func NewParentLookup(st store.VectorStore) *ParentLookup {
 	return &ParentLookup{st: st}
 }
 

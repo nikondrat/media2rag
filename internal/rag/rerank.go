@@ -46,7 +46,7 @@ type ollamaRerankResponse struct {
 
 func (r *Reranker) Rerank(ctx context.Context, query string, results []store.SearchResult, topK int) ([]store.SearchResult, error) {
 	if !r.enabled {
-		return store.TopK(results, topK), nil
+		return TopK(results, topK), nil
 	}
 
 	documents := make([]string, len(results))
@@ -62,28 +62,28 @@ func (r *Reranker) Rerank(ctx context.Context, query string, results []store.Sea
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
-		return store.TopK(results, topK), fmt.Errorf("encode rerank: %w", err)
+		return TopK(results, topK), fmt.Errorf("encode rerank: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, r.baseURL+"/api/rerank", &buf)
 	if err != nil {
-		return store.TopK(results, topK), fmt.Errorf("rerank request: %w", err)
+		return TopK(results, topK), fmt.Errorf("rerank request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
-		return store.TopK(results, topK), fmt.Errorf("rerank call: %w", err)
+		return TopK(results, topK), fmt.Errorf("rerank call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return store.TopK(results, topK), nil
+		return TopK(results, topK), nil
 	}
 
 	var rerankResp ollamaRerankResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rerankResp); err != nil {
-		return store.TopK(results, topK), nil
+		return TopK(results, topK), nil
 	}
 
 	reranked := make([]store.SearchResult, 0, len(rerankResp.Results))
@@ -102,5 +102,5 @@ func (r *Reranker) Rerank(ctx context.Context, query string, results []store.Sea
 		}
 	}
 
-	return store.TopK(reranked, topK), nil
+	return TopK(reranked, topK), nil
 }

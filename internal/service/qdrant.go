@@ -18,7 +18,7 @@ const (
 
 type Qdrant struct {
 	cfg          config.QdrantConfig
-	st           *store.Store
+	st           store.VectorStore
 	ownContainer bool
 }
 
@@ -26,7 +26,7 @@ func NewQdrant(cfg config.QdrantConfig) *Qdrant {
 	return &Qdrant{cfg: cfg}
 }
 
-func (q *Qdrant) EnsureRunning(ctx context.Context, embedClient llm.LLMClient) (*store.Store, error) {
+func (q *Qdrant) EnsureRunning(ctx context.Context, embedClient llm.LLMClient) (store.VectorStore, error) {
 	if q.st != nil {
 		return q.st, nil
 	}
@@ -60,7 +60,7 @@ func (q *Qdrant) EnsureRunning(ctx context.Context, embedClient llm.LLMClient) (
 	return st, nil
 }
 
-func (q *Qdrant) ensureCollections(ctx context.Context, st *store.Store, embedClient llm.LLMClient) {
+func (q *Qdrant) ensureCollections(ctx context.Context, st store.VectorStore, embedClient llm.LLMClient) {
 	dim := uint64(q.cfg.VectorDim)
 	if err := st.InitCollections(ctx, dim); err != nil {
 		return
@@ -86,7 +86,7 @@ func (q *Qdrant) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (q *Qdrant) tryConnect(ctx context.Context) (*store.Store, error) {
+func (q *Qdrant) tryConnect(ctx context.Context) (store.VectorStore, error) {
 	st, err := store.New(q.cfg.Host, q.cfg.Port)
 	if err != nil {
 		return nil, err
@@ -134,7 +134,7 @@ func (q *Qdrant) startContainer(ctx context.Context) error {
 	return nil
 }
 
-func (q *Qdrant) waitForReady(ctx context.Context) (*store.Store, error) {
+func (q *Qdrant) waitForReady(ctx context.Context) (store.VectorStore, error) {
 	deadline := time.Now().Add(pollTimeout)
 	for time.Now().Before(deadline) {
 		select {

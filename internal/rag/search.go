@@ -7,10 +7,10 @@ import (
 )
 
 type Searcher struct {
-	st *store.Store
+	st store.VectorStore
 }
 
-func NewSearcher(st *store.Store) *Searcher {
+func NewSearcher(st store.VectorStore) *Searcher {
 	return &Searcher{st: st}
 }
 
@@ -19,7 +19,7 @@ func (s *Searcher) SearchDense(ctx context.Context, query []float32, topK uint64
 }
 
 func (s *Searcher) SearchSparse(ctx context.Context, query string, denseResults []store.SearchResult) []store.SearchResult {
-	return store.KeywordOverlapSearch(query, denseResults)
+	return KeywordOverlapSearch(query, denseResults)
 }
 
 func (s *Searcher) HybridSearch(ctx context.Context, query string, embedding []float32, topK int) ([]store.SearchResult, error) {
@@ -29,11 +29,11 @@ func (s *Searcher) HybridSearch(ctx context.Context, query string, embedding []f
 		return nil, err
 	}
 
-	sparseResults := store.KeywordOverlapSearch(query, denseResults)
+	sparseResults := KeywordOverlapSearch(query, denseResults)
 	if len(sparseResults) == 0 {
 		sparseResults = denseResults
 	}
 
-	fused := store.RRF(denseResults, sparseResults, 60.0)
-	return store.TopK(fused, topK), nil
+	fused := RRF(denseResults, sparseResults, 60.0)
+	return TopK(fused, topK), nil
 }

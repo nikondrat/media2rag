@@ -18,12 +18,12 @@ const (
 )
 
 type Indexer struct {
-	store  *store.Store
+	st     store.VectorStore
 	client llm.LLMClient
 }
 
-func NewIndexer(s *store.Store, client llm.LLMClient) *Indexer {
-	return &Indexer{store: s, client: client}
+func NewIndexer(st store.VectorStore, client llm.LLMClient) *Indexer {
+	return &Indexer{st: st, client: client}
 }
 
 type Chunk struct {
@@ -76,7 +76,7 @@ func (idx *Indexer) IndexDocument(ctx context.Context, documentID, content strin
 		}
 	}
 
-	return idx.store.UpsertPoints(ctx, "documents", points)
+	return idx.st.UpsertPoints(ctx, "documents", points)
 }
 
 func (idx *Indexer) embed(ctx context.Context, text string) ([]float32, error) {

@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func requireStore(t *testing.T) *store.Store {
+func requireStore(t *testing.T) store.VectorStore {
 	t.Helper()
 	ctx := context.Background()
 

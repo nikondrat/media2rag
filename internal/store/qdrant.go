@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strconv"
-	"strings"
 
 	qdrant "github.com/qdrant/go-client/qdrant"
 )
@@ -22,11 +21,11 @@ type SearchResult struct {
 	Payload map[string]string
 }
 
-type Store struct {
+type QdrantStore struct {
 	client *qdrant.Client
 }
 
-func New(host string, port int) (*Store, error) {
+func New(host string, port int) (*QdrantStore, error) {
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host:                   host,
 		Port:                   port,
@@ -35,14 +34,14 @@ func New(host string, port int) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
-	return &Store{client: client}, nil
+	return &QdrantStore{client: client}, nil
 }
 
-func (s *Store) Close() error {
+func (s *QdrantStore) Close() error {
 	return s.client.Close()
 }
 
-func (s *Store) InitCollections(ctx context.Context, dim uint64) error {
+func (s *QdrantStore) InitCollections(ctx context.Context, dim uint64) error {
 	collections := []string{"documents", "memories"}
 	for _, name := range collections {
 		exists, err := s.client.CollectionExists(ctx, name)
@@ -66,7 +65,7 @@ func (s *Store) InitCollections(ctx context.Context, dim uint64) error {
 	return nil
 }
 
-func (s *Store) UpsertPoints(ctx context.Context, collection string, points []*qdrant.PointStruct) error {
+func (s *QdrantStore) UpsertPoints(ctx context.Context, collection string, points []*qdrant.PointStruct) error {
 	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
 		CollectionName: collection,
 		Points:         points,
@@ -77,7 +76,7 @@ func (s *Store) UpsertPoints(ctx context.Context, collection string, points []*q
 	return nil
 }
 
-func (s *Store) SearchPoints(ctx context.Context, collection string, vector []float32, topK uint64) ([]SearchResult, error) {
+func (s *QdrantStore) SearchPoints(ctx context.Context, collection string, vector []float32, topK uint64) ([]SearchResult, error) {
 	results, err := s.client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: collection,
 		Query:          qdrant.NewQuery(vector...),
@@ -90,7 +89,7 @@ func (s *Store) SearchPoints(ctx context.Context, collection string, vector []fl
 	return scoredToResults(results), nil
 }
 
-func (s *Store) DeletePoints(ctx context.Context, collection, documentID string) error {
+func (s *QdrantStore) DeletePoints(ctx context.Context, collection, documentID string) error {
 	_, err := s.client.Delete(ctx, &qdrant.DeletePoints{
 		CollectionName: collection,
 		Points: qdrant.NewPointsSelectorFilter(&qdrant.Filter{
@@ -103,11 +102,11 @@ func (s *Store) DeletePoints(ctx context.Context, collection, documentID string)
 	return nil
 }
 
-func (s *Store) ListCollections(ctx context.Context) ([]string, error) {
+func (s *QdrantStore) ListCollections(ctx context.Context) ([]string, error) {
 	return s.client.ListCollections(ctx)
 }
 
-func (s *Store) GetPointsByID(ctx context.Context, collection string, ids []string) ([]SearchResult, error) {
+func (s *QdrantStore) GetPointsByID(ctx context.Context, collection string, ids []string) ([]SearchResult, error) {
 	pointIDs := make([]*qdrant.PointId, len(ids))
 	for i, id := range ids {
 		pointIDs[i] = IDFromString(id)
@@ -123,7 +122,7 @@ func (s *Store) GetPointsByID(ctx context.Context, collection string, ids []stri
 	return retrievedToResults(results), nil
 }
 
-func (s *Store) ScrollByFilter(ctx context.Context, collection, field, value string) ([]SearchResult, error) {
+func (s *QdrantStore) ScrollByFilter(ctx context.Context, collection, field, value string) ([]SearchResult, error) {
 	limit := uint32(100)
 	results, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
 		CollectionName: collection,
@@ -223,75 +222,4 @@ func retrievedToResults(points []*qdrant.RetrievedPoint) []SearchResult {
 	return out
 }
 
-func KeywordOverlapSearch(query string, results []SearchResult) []SearchResult {
-	terms := strings.Fields(strings.ToLower(query))
-	if len(terms) == 0 {
-		return results
-	}
 
-	type scored struct {
-		result SearchResult
-		score  float64
-	}
-	scoredList := make([]scored, 0, len(results))
-	for _, r := range results {
-		content := strings.ToLower(r.Payload["content"])
-		count := 0
-		for _, t := range terms {
-			if strings.Contains(content, t) {
-				count++
-			}
-		}
-		if count > 0 {
-			scoredList = append(scoredList, scored{r, float64(count) / float64(len(terms))})
-		}
-	}
-	ranked := make([]SearchResult, len(scoredList))
-	for i, s := range scoredList {
-		s.result.Score = s.score
-		ranked[i] = s.result
-	}
-	return ranked
-}
-
-func RRF(dense []SearchResult, sparse []SearchResult, k float64) []SearchResult {
-	type entry struct {
-		result SearchResult
-		score  float64
-	}
-	seen := map[string]*entry{}
-	for i, r := range dense {
-		score := 1.0 / (k + float64(i))
-		e := &entry{result: r, score: score}
-		seen[r.ID] = e
-	}
-	for i, r := range sparse {
-		if e, ok := seen[r.ID]; ok {
-			e.score += 1.0 / (k + float64(i))
-		} else {
-			e := &entry{result: r, score: 1.0 / (k + float64(i))}
-			seen[r.ID] = e
-		}
-	}
-
-	results := make([]SearchResult, 0, len(seen))
-	for _, e := range seen {
-		e.result.Score = e.score
-		results = append(results, e.result)
-	}
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].Score > results[i].Score {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
-	return results
-}
-
-func TopK(results []SearchResult, k int) []SearchResult {
-	if len(results) <= k {
-		return results
-	}
-	return results[:k]
-}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"media2rag/internal/store"
 	"media2rag/internal/workspace"
 )
 
@@ -34,6 +36,7 @@ var statusCmd = &cobra.Command{
 		services := []serviceStatus{
 			checkOllama(),
 			checkRdrr(),
+			checkQdrant(),
 			checkWorkspace(),
 		}
 
@@ -123,4 +126,30 @@ func checkWorkspace() serviceStatus {
 		return serviceStatus{Name: "Workspace", Status: "ok", Details: fmt.Sprintf("exists (%d docs)", count)}
 	}
 	return serviceStatus{Name: "Workspace", Status: "ok", Details: fmt.Sprintf("%d documents", count)}
+}
+
+func checkQdrant() serviceStatus {
+	host := cfg.RAG.Qdrant.Host
+	port := cfg.RAG.Qdrant.Port
+	if host == "" {
+		host = "localhost"
+	}
+	if port == 0 {
+		port = 6334
+	}
+
+	st, err := store.New(host, port)
+	if err != nil {
+		return serviceStatus{Name: "Qdrant", Status: "error", Details: fmt.Sprintf("connect: %v", err)}
+	}
+	defer st.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cols, err := st.ListCollections(ctx)
+	if err != nil {
+		return serviceStatus{Name: "Qdrant", Status: "error", Details: fmt.Sprintf("ping: %v", err)}
+	}
+	return serviceStatus{Name: "Qdrant", Status: "ok", Details: fmt.Sprintf("%d collections", len(cols))}
 }

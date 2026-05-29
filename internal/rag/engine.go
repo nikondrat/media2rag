@@ -9,7 +9,7 @@ import (
 )
 
 type Engine struct {
-	store       *store.Store
+	store       store.VectorStore
 	llm         llm.LLMClient
 	embedClient llm.LLMClient
 	embedModel  string
@@ -22,7 +22,7 @@ type Engine struct {
 }
 
 type EngineConfig struct {
-	Store          *store.Store
+	Store          store.VectorStore
 	LLM            llm.LLMClient
 	EmbedClient    llm.LLMClient
 	OllamaURL      string
@@ -97,7 +97,7 @@ func (e *Engine) Query(ctx context.Context, q RAGQuery) (*RAGResponse, error) {
 
 	reranked, err := e.reranker.Rerank(ctx, rewritten, allResults, topK)
 	if err != nil {
-		reranked = store.TopK(allResults, topK)
+		reranked = TopK(allResults, topK)
 	}
 
 	parentResults, err := e.parent.Lookup(ctx, reranked)
