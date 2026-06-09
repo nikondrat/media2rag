@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -43,6 +44,8 @@ into RAG-ready Markdown with structured metadata.`,
 			cfg.LLM.Model,
 			cfg.LLM.OpenRouterURL,
 			cfg.LLM.OpenRouterKey,
+			cfg.LLM.LMStudioURL,
+			time.Duration(cfg.LLM.Timeout)*time.Second,
 		)
 		if err != nil {
 			return fmt.Errorf("init llm client: %w", err)

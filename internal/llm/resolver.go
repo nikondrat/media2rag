@@ -5,29 +5,33 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"media2rag/internal/model"
 )
 
-func NewClient(ctx context.Context, backend, ollamaURL, model, openRouterURL, openRouterKey string) (LLMClient, error) {
-	primary, err := primaryClient(ctx, backend, ollamaURL, model, openRouterURL, openRouterKey)
+func NewClient(ctx context.Context, backend, ollamaURL, model, openRouterURL, openRouterKey string, lmStudioURL string, timeout time.Duration) (LLMClient, error) {
+	primary, err := primaryClient(ctx, backend, ollamaURL, model, openRouterURL, openRouterKey, lmStudioURL, timeout)
 	if err != nil {
 		return nil, err
 	}
 
 	if openRouterKey != "" {
-		fallback := NewOpenRouterClient(openRouterURL, openRouterKey, model)
+		fallback := NewOpenRouterClient(openRouterURL, openRouterKey, model, timeout)
 		return &fallbackClient{primary: primary, fallback: fallback}, nil
 	}
 
 	return primary, nil
 }
 
-func primaryClient(ctx context.Context, backend, ollamaURL, model, openRouterURL, openRouterKey string) (LLMClient, error) {
-	if backend == "openrouter" {
-		return NewOpenRouterClient(openRouterURL, openRouterKey, model), nil
+func primaryClient(ctx context.Context, backend, ollamaURL, model, openRouterURL, openRouterKey string, lmStudioURL string, timeout time.Duration) (LLMClient, error) {
+	switch backend {
+	case "openrouter":
+		return NewOpenRouterClient(openRouterURL, openRouterKey, model, timeout), nil
+	case "lmstudio":
+		return NewOpenRouterClient(lmStudioURL, "", model, timeout), nil
 	}
-	return NewOllamaClient(ollamaURL, model), nil
+	return NewOllamaClient(ollamaURL, model, timeout), nil
 }
 
 type fallbackClient struct {
@@ -90,12 +94,12 @@ func (f *fallbackClient) Embed(ctx context.Context, text string) ([]float32, err
 	return resp, nil
 }
 
-func NewClientFromChain(ctx context.Context, models []string, backend, ollamaURL, openRouterURL, openRouterKey string) (LLMClient, error) {
+func NewClientFromChain(ctx context.Context, models []string, backend, ollamaURL, openRouterURL, openRouterKey string, timeout time.Duration) (LLMClient, error) {
 	if len(models) == 0 {
 		return nil, fmt.Errorf("empty model chain")
 	}
 
-	primary, err := newClientForModel(ctx, models[0], backend, ollamaURL, openRouterURL, openRouterKey)
+	primary, err := newClientForModel(ctx, models[0], backend, ollamaURL, openRouterURL, openRouterKey, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +112,7 @@ func NewClientFromChain(ctx context.Context, models []string, backend, ollamaURL
 	client.clients[0] = primary
 
 	for i := 1; i < len(models); i++ {
-		c, err := newClientForModel(ctx, models[i], backend, ollamaURL, openRouterURL, openRouterKey)
+		c, err := newClientForModel(ctx, models[i], backend, ollamaURL, openRouterURL, openRouterKey, timeout)
 		if err != nil {
 			return nil, err
 		}
@@ -118,13 +122,13 @@ func NewClientFromChain(ctx context.Context, models []string, backend, ollamaURL
 	return client, nil
 }
 
-func newClientForModel(ctx context.Context, model, backend, ollamaURL, openRouterURL, openRouterKey string) (LLMClient, error) {
+func newClientForModel(ctx context.Context, model, backend, ollamaURL, openRouterURL, openRouterKey string, timeout time.Duration) (LLMClient, error) {
 	if openRouterKey != "" {
 		if strings.Contains(model, "openrouter") || strings.Contains(model, "/") {
-			return NewOpenRouterClient(openRouterURL, openRouterKey, model), nil
+			return NewOpenRouterClient(openRouterURL, openRouterKey, model, timeout), nil
 		}
 	}
-	return NewOllamaClient(ollamaURL, model), nil
+	return NewOllamaClient(ollamaURL, model, timeout), nil
 }
 
 type chainClient struct {

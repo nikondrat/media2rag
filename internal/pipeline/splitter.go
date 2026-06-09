@@ -11,26 +11,38 @@ import (
 
 var splitDelimiters = []string{"\n\n\n", "\n\n", "\n", ". "}
 
-func (p *Pipeline) splitText(text string) []string {
+const minChunkSize = 200
+
+func (p *Pipeline) splitText(text string) ([]string, error) {
 	if p.checkpointDir != "" {
 		chunks := loadChunks(p.checkpointDir)
 		if chunks != nil {
-			return chunks
+			return chunks, nil
 		}
 	}
 
 	chunks := splitTextPure(text, p.config)
 
 	if p.checkpointDir != "" {
-		saveChunks(p.checkpointDir, chunks)
+		if err := saveChunks(p.checkpointDir, chunks); err != nil {
+			return chunks, err
+		}
 	}
 
-	return chunks
+	return chunks, nil
 }
 
 func splitTextPure(text string, cfg PipelineConfig) []string {
 	if len(text) <= cfg.ChunkSize {
 		return []string{text}
+	}
+
+	overlap := cfg.ChunkOverlap
+	if overlap >= cfg.ChunkSize {
+		overlap = cfg.ChunkSize / 4
+	}
+	if overlap < minChunkSize/2 {
+		overlap = minChunkSize / 2
 	}
 
 	var chunks []string
@@ -43,15 +55,53 @@ func splitTextPure(text string, cfg PipelineConfig) []string {
 		}
 
 		splitAt := findSplitPoint(text, start, end)
+
+		if splitAt <= start {
+			splitAt = start + minChunkSize
+			if splitAt > len(text) {
+				splitAt = len(text)
+			}
+		}
+
+		if splitAt > len(text) {
+			splitAt = len(text)
+		}
+
 		chunks = append(chunks, text[start:splitAt])
 
-		start = splitAt - cfg.ChunkOverlap
-		if start < 0 {
-			start = 0
+		nextStart := splitAt - overlap
+		if nextStart <= start {
+			nextStart = splitAt
+		}
+		if nextStart >= len(text) {
+			break
+		}
+		start = nextStart
+	}
+
+	return dedupChunkOverlap(chunks, overlap)
+}
+
+func dedupChunkOverlap(chunks []string, overlap int) []string {
+	if len(chunks) <= 1 {
+		return chunks
+	}
+
+	deduped := make([]string, len(chunks))
+	copy(deduped, chunks)
+
+	for i := 1; i < len(deduped); i++ {
+		prev := deduped[i-1]
+		curr := deduped[i]
+		if overlap > 0 && len(prev) >= overlap {
+			tail := prev[len(prev)-overlap:]
+			if strings.HasPrefix(curr, tail) {
+				deduped[i] = curr[len(tail):]
+			}
 		}
 	}
 
-	return chunks
+	return deduped
 }
 
 func findSplitPoint(text string, start, end int) int {
@@ -97,11 +147,23 @@ func loadChunks(dir string) []string {
 	return chunks
 }
 
-func saveChunks(dir string, chunks []string) {
+func saveChunks(dir string, chunks []string) error {
 	chunkDir := filepath.Join(dir, "chunks")
-	os.MkdirAll(chunkDir, 0755)
+	if err := os.MkdirAll(chunkDir, 0755); err != nil {
+		return fmt.Errorf("create chunk dir: %w", err)
+	}
 	for i, chunk := range chunks {
 		name := fmt.Sprintf("chunk-%03d.md", i+1)
-		os.WriteFile(filepath.Join(chunkDir, name), []byte(chunk), 0644)
+		if err := os.WriteFile(filepath.Join(chunkDir, name), []byte(chunk), 0644); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
 	}
+	return nil
+}
+
+func (p *Pipeline) SaveChunks(dir string, chunks []string) error {
+	if dir == "" {
+		return nil
+	}
+	return saveChunks(dir, chunks)
 }

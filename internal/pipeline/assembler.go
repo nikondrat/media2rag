@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
+
+	"golang.org/x/text/unicode/norm"
 
 	"media2rag/internal/model"
 )
@@ -14,250 +15,339 @@ type assembleOpts struct {
 	docType    string
 	author     string
 	language   string
-	coreThesis string
 	domains    []string
+	coreThesis string
 }
 
-func assemble(results []ChunkResult, cleaned string, opts assembleOpts) *model.RAGDocument {
-	topicFreq := make(map[string]int)
-	allClaims := make([]model.Claim, 0)
-	allMental := make([]string, 0)
-	allKeyTerms := make([]model.KeyTerm, 0)
-	allTakeaways := make([]string, 0)
-	perChunkThesis := ""
+type AssemblyInput struct {
+	Content          string
+	Chunks           []ChunkResult
+	HolisticAnalysis string
+	SourcePath       string
+	SourceHash       string
+	SourceType       string
+	Frontmatter      map[string]interface{}
+}
 
-	for _, r := range results {
-		for _, t := range r.Topics {
-			topicFreq[t]++
+func assemble(results []ChunkResult, opts assembleOpts) *model.RAGDocument {
+	fm := map[string]interface{}{}
+
+	if opts.author != "" {
+		fm["author"] = opts.author
+	}
+	fm["language"] = opts.language
+	if len(opts.domains) > 0 {
+		topics := make([]interface{}, len(opts.domains))
+		for i, d := range opts.domains {
+			topics[i] = d
 		}
-		allClaims = append(allClaims, r.Claims...)
-		allMental = append(allMental, r.MentalModels...)
-		allKeyTerms = append(allKeyTerms, r.KeyTerms...)
-		allTakeaways = append(allTakeaways, r.Takeaways...)
-		if r.CoreThesis != "" {
-			perChunkThesis = r.CoreThesis
+		fm["topics"] = topics
+	}
+
+	input := &AssemblyInput{
+		Chunks:     results,
+		SourcePath: opts.source,
+		SourceType: opts.docType,
+		Frontmatter: fm,
+	}
+
+	title := CollectTitle(input)
+	fm["title"] = title
+
+	holisticText := ""
+	if opts.coreThesis != "" {
+		holisticText = "## Holistic Analysis\n\n" + opts.coreThesis + "\n"
+	}
+	input.HolisticAnalysis = holisticText
+
+	markdown := assembleOutput(input)
+
+	var docChunks []model.Chunk
+	for _, ch := range results {
+		docChunks = append(docChunks, model.Chunk{
+			Index:         ch.Index,
+			Type:          ch.Type,
+			Topic:         ch.Topic,
+			Summary:       ch.Summary,
+			Content:       ch.Content,
+			Context:       ch.Context,
+			KeyPoints:     ch.KeyPoints,
+			SourceQuote:   ch.SourceQuote,
+			MyTakeaway:    ch.MyTakeaway,
+			Confidence:    ch.Confidence,
+			Applicability: ch.Applicability,
+			Steps:         ch.Steps,
+		})
+	}
+
+	topicSet := map[string]bool{}
+	for _, ch := range results {
+		if ch.Topic != "" {
+			topicSet[ch.Topic] = true
+		}
+		for _, t := range ch.Topics {
+			topicSet[t] = true
+		}
+	}
+	for _, d := range opts.domains {
+		topicSet[d] = true
+	}
+	var topics []string
+	for t := range topicSet {
+		topics = append(topics, t)
+	}
+	sort.Strings(topics)
+
+	var takeaways []string
+	for _, ch := range results {
+		if ch.MyTakeaway != "" {
+			takeaways = append(takeaways, ch.MyTakeaway)
 		}
 	}
 
-	type tc struct {
-		topic string
-		count int
+	doc := &model.RAGDocument{
+		Markdown: markdown,
+		Chunks:   docChunks,
+		Metadata: model.DocumentMetadata{
+			Title:      title,
+			Author:     opts.author,
+			Source:     opts.source,
+			DocType:    opts.docType,
+			Language:   opts.language,
+			Domains:    opts.domains,
+			CoreThesis: opts.coreThesis,
+			Topics:     topics,
+			Takeaways:  takeaways,
+			Status:     "processed",
+		},
 	}
-	var sorted []tc
-	for t, c := range topicFreq {
-		sorted = append(sorted, tc{t, c})
+
+	wordCount := 0
+	for _, ch := range results {
+		wordCount += len(strings.Fields(ch.Content))
 	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].count > sorted[j].count
+	doc.Metadata.WordCount = wordCount
+
+	return doc
+}
+
+func assembleOutput(input *AssemblyInput) string {
+	var b strings.Builder
+
+	writeFrontmatter(&b, input)
+	b.WriteString("---\n\n")
+
+	chunks := input.Chunks
+	sort.Slice(chunks, func(i, j int) bool {
+		return chunks[i].Index < chunks[j].Index
 	})
 
-	var topics []string
-	for _, t := range sorted {
-		topics = append(topics, t.topic)
-	}
-
-	title := ""
-	for _, r := range results {
-		if r.Title != "" {
-			title = r.Title
-			break
+	for i, ch := range chunks {
+		if ch.Type == "" && ch.Summary == "" {
+			continue
 		}
-	}
-	if title == "" && len(sorted) > 0 {
-		title = sorted[0].topic
-	}
-
-	var summaries []string
-	for _, r := range results {
-		if r.Summary != "" {
-			summaries = append(summaries, r.Summary)
+		if i > 0 {
+			b.WriteString("\n")
 		}
-	}
-	summary := strings.Join(summaries, " ")
+		fmt.Fprintf(&b, "## chunk_%02d\n", ch.Index+1)
+		if ch.Context != "" {
+			writeField(&b, "context", ch.Context)
+		}
+		writeField(&b, "type", ch.Type)
+		writeField(&b, "topic", ch.Topic)
+		writeField(&b, "summary", ch.Summary)
 
-	wc := wordCount(cleaned)
+		if len(ch.KeyPoints) > 0 {
+			b.WriteString("key_points:\n")
+			for _, kp := range ch.KeyPoints {
+				kp = strings.TrimSpace(kp)
+				if kp != "" {
+					b.WriteString("- ")
+					b.WriteString(kp)
+					b.WriteString("\n")
+				}
+			}
+		}
 
-	coreThesis := opts.coreThesis
-	if coreThesis == "" {
-		coreThesis = perChunkThesis
-	}
+		writeField(&b, "source_quote", ch.SourceQuote)
+		writeField(&b, "my_takeaway", ch.MyTakeaway)
+		writeField(&b, "confidence", ConfidenceToString(ch.Confidence))
+		writeField(&b, "applicability", ch.Applicability)
 
-	domains := opts.domains
-
-	claims := dedupClaims(allClaims)
-	mentalModels := dedupStrings(allMental)
-	keyTerms := dedupKeyTerms(allKeyTerms)
-	takeaways := dedupStrings(allTakeaways)
-
-	md := model.DocumentMetadata{
-		Title:        title,
-		Author:       opts.author,
-		Source:       opts.source,
-		DocType:      opts.docType,
-		Language:     opts.language,
-		Domains:      domains,
-		CoreThesis:   coreThesis,
-		MentalModels: mentalModels,
-		Claims:       claims,
-		Takeaways:    takeaways,
-		KeyTerms:     keyTerms,
-		Summary:      summary,
-		WordCount:    wc,
-		Topics:       topics,
-	}
-
-	frontmatter := buildYAMLFrontmatter(md)
-
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.WriteString(frontmatter)
-	sb.WriteString("---\n\n")
-	sb.WriteString(cleaned)
-
-	return &model.RAGDocument{
-		Markdown: sb.String(),
-		Metadata: md,
-	}
-}
-
-func buildYAMLFrontmatter(md model.DocumentMetadata) string {
-	var sb strings.Builder
-	now := time.Now()
-
-	writeYAMLField(&sb, "title", md.Title)
-	writeYAMLField(&sb, "source", md.Source)
-	writeYAMLField(&sb, "type", md.DocType)
-	writeYAMLField(&sb, "author", md.Author)
-	writeYAMLField(&sb, "language", md.Language)
-	sb.WriteString(fmt.Sprintf("created_at: %s\n", now.Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("word_count: %d\n", md.WordCount))
-
-	writeYAMLList(&sb, "domains", mapSlice(md.Domains))
-	writeYAMLField(&sb, "core_thesis", md.CoreThesis)
-	writeYAMLList(&sb, "mental_models", mapSlice(md.MentalModels))
-	writeYAMLClaimList(&sb, md.Claims)
-	writeYAMLList(&sb, "takeaways", mapSlice(md.Takeaways))
-	writeYAMLKeyTermList(&sb, md.KeyTerms)
-	writeYAMLField(&sb, "summary", md.Summary)
-	writeYAMLList(&sb, "topics", mapSlice(md.Topics))
-
-	return sb.String()
-}
-
-func writeYAMLField(sb *strings.Builder, key, value string) {
-	if value == "" {
-		return
-	}
-	sb.WriteString(fmt.Sprintf("%s: %s\n", key, yamlStr(value)))
-}
-
-func writeYAMLList(sb *strings.Builder, key string, items []string) {
-	if len(items) == 0 {
-		return
-	}
-	sb.WriteString(fmt.Sprintf("%s:\n", key))
-	for _, item := range items {
-		sb.WriteString(fmt.Sprintf("  - %s\n", yamlStr(item)))
-	}
-}
-
-func writeYAMLClaimList(sb *strings.Builder, claims []model.Claim) {
-	if len(claims) == 0 {
-		return
-	}
-	sb.WriteString("claims:\n")
-	for _, c := range claims {
-		sb.WriteString(fmt.Sprintf("  - statement: %s\n", yamlStr(c.Statement)))
-		sb.WriteString(fmt.Sprintf("    confidence: %.2f\n", c.Confidence))
-		sb.WriteString(fmt.Sprintf("    source: %s\n", yamlStr(c.Source)))
-	}
-}
-
-func writeYAMLKeyTermList(sb *strings.Builder, terms []model.KeyTerm) {
-	if len(terms) == 0 {
-		return
-	}
-	sb.WriteString("key_terms:\n")
-	for _, kt := range terms {
-		sb.WriteString(fmt.Sprintf("  - term: %s\n", yamlStr(kt.Term)))
-		sb.WriteString(fmt.Sprintf("    definition: %s\n", yamlStr(kt.Definition)))
-	}
-}
-
-func yamlStr(s string) string {
-	if s == "" {
-		return "\"\""
-	}
-	if strings.ContainsAny(s, ":\"#{}[]&*!|>'%@`") || strings.HasPrefix(s, "-") {
-		return fmt.Sprintf("%q", s)
-	}
-	return s
-}
-
-func wordCount(s string) int {
-	if s == "" {
-		return 0
-	}
-	count := 1
-	inWord := false
-	for _, c := range s {
-		if c == ' ' || c == '\n' || c == '\t' {
-			inWord = false
-		} else {
-			if !inWord {
-				count++
-				inWord = true
+		if len(ch.Steps) > 0 {
+			b.WriteString("steps:\n")
+			for _, s := range ch.Steps {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					b.WriteString("- ")
+					b.WriteString(s)
+					b.WriteString("\n")
+				}
 			}
 		}
 	}
-	return count - 1
+
+	if input.HolisticAnalysis != "" {
+		b.WriteString("\n")
+		b.WriteString(input.HolisticAnalysis)
+	}
+
+	return b.String()
 }
 
-func dedupClaims(claims []model.Claim) []model.Claim {
-	seen := make(map[string]bool)
-	var result []model.Claim
-	for _, c := range claims {
-		key := strings.TrimSpace(strings.ToLower(c.Statement))
-		if key == "" || seen[key] {
-			continue
+func writeFrontmatter(b *strings.Builder, input *AssemblyInput) {
+	fm := input.Frontmatter
+
+	writeField(b, "id", input.SourceHash)
+	writeFieldFromMap(b, "title", fm, "title", "")
+	writeFieldFromMap(b, "source_type", fm, "source_type", input.SourceType)
+
+	if input.SourcePath != "" {
+		writeField(b, "source", input.SourcePath)
+	}
+
+	writeFieldFromMap(b, "author", fm, "author", "")
+	writeFieldFromMap(b, "date", fm, "date", "")
+	writeFieldFromMap(b, "language", fm, "language", "ru")
+
+	if topics, ok := extractStringList(fm, "topics"); ok {
+		b.WriteString("topics: [")
+		b.WriteString(strings.Join(topics, ", "))
+		b.WriteString("]\n")
+	}
+
+	writeFieldFromMap(b, "confidence", fm, "confidence", "")
+	writeFieldFromMap(b, "status", fm, "status", "processed")
+	writeFieldFromMap(b, "my_relevance", fm, "my_relevance", "")
+
+	if tags, ok := extractStringList(fm, "tags"); ok {
+		b.WriteString("tags: [")
+		b.WriteString(strings.Join(tags, ", "))
+		b.WriteString("]\n")
+	}
+}
+
+func writeField(b *strings.Builder, key, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	if strings.Contains(value, "\n") {
+		b.WriteString(key)
+		b.WriteString(": |\n")
+		for _, line := range strings.Split(value, "\n") {
+			b.WriteString("  ")
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
-		seen[key] = true
-		result = append(result, c)
+	} else {
+		b.WriteString(key)
+		b.WriteString(": ")
+		b.WriteString(value)
+		b.WriteString("\n")
 	}
-	return result
 }
 
-func dedupStrings(items []string) []string {
-	seen := make(map[string]bool)
-	var result []string
-	for _, item := range items {
-		key := strings.TrimSpace(strings.ToLower(item))
-		if key == "" || seen[key] {
-			continue
+func writeFieldFromMap(b *strings.Builder, key string, fm map[string]interface{}, mapKey string, fallback string) {
+	if fm == nil {
+		if fallback != "" {
+			writeField(b, key, fallback)
 		}
-		seen[key] = true
-		result = append(result, item)
+		return
 	}
-	return result
-}
-
-func dedupKeyTerms(terms []model.KeyTerm) []model.KeyTerm {
-	seen := make(map[string]bool)
-	var result []model.KeyTerm
-	for _, kt := range terms {
-		key := strings.TrimSpace(strings.ToLower(kt.Term))
-		if key == "" || seen[key] {
-			continue
+	v, ok := fm[mapKey]
+	if !ok {
+		v, ok = fm[key]
+	}
+	if ok {
+		s := fmt.Sprintf("%v", v)
+		if strings.TrimSpace(s) != "" {
+			writeField(b, key, s)
+			return
 		}
-		seen[key] = true
-		result = append(result, kt)
 	}
-	return result
+	if fallback != "" {
+		writeField(b, key, fallback)
+	}
 }
 
-func mapSlice(items []string) []string {
-	if items == nil {
-		return []string{}
+func extractStringList(fm map[string]interface{}, key string) ([]string, bool) {
+	if fm == nil {
+		return nil, false
 	}
-	return items
+	v, ok := fm[key]
+	if !ok {
+		return nil, false
+	}
+
+	switch val := v.(type) {
+	case []interface{}:
+		result := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				result = append(result, strings.TrimSpace(s))
+			}
+		}
+		return result, true
+	case string:
+		cleaned := strings.Trim(val, "[]")
+		parts := strings.Split(cleaned, ",")
+		result := make([]string, 0, len(parts))
+		for _, p := range parts {
+			t := strings.TrimSpace(p)
+			if t != "" {
+				result = append(result, t)
+			}
+		}
+		return result, true
+	}
+	return nil, false
+}
+
+func CollectTitle(input *AssemblyInput) string {
+	if input.Frontmatter != nil {
+		if t, ok := input.Frontmatter["title"]; ok {
+			if s, ok := t.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	if input.SourcePath != "" {
+		parts := strings.Split(input.SourcePath, "/")
+		filename := parts[len(parts)-1]
+		if idx := strings.LastIndex(filename, "."); idx > 0 {
+			filename = filename[:idx]
+		}
+		return SanitizeFilename(filename)
+	}
+	return "unnamed_document"
+}
+
+func SanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(
+		"/", "-",
+		"\\", "-",
+		":", "-",
+		"*", "-",
+		"?", "-",
+		"\"", "'",
+		"<", "-",
+		">", "-",
+		"|", "-",
+		"\x00", "",
+	)
+	name = replacer.Replace(name)
+	name = norm.NFC.String(name)
+	name = strings.Join(strings.Fields(name), " ")
+	return strings.TrimSpace(name)
+}
+
+func ConfidenceToString(c float64) string {
+	switch {
+	case c >= 0.7:
+		return "high"
+	case c >= 0.4:
+		return "medium"
+	default:
+		return "low"
+	}
 }

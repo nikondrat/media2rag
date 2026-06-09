@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"media2rag/internal/model"
 )
@@ -17,20 +19,26 @@ type OpenRouterClient struct {
 	apiKey   string
 	model    string
 	client   *http.Client
+	maxRetry int
 }
 
-func NewOpenRouterClient(baseURL, apiKey, model string) *OpenRouterClient {
+func NewOpenRouterClient(baseURL, apiKey, model string, timeout time.Duration) *OpenRouterClient {
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
 	return &OpenRouterClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		model:   model,
-		client:  &http.Client{},
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		apiKey:   apiKey,
+		model:    model,
+		client:   &http.Client{Timeout: timeout},
+		maxRetry: 3,
 	}
 }
 
 type openRouterMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type openRouterRequest struct {
@@ -62,6 +70,80 @@ type openRouterStreamResponse struct {
 	Choices []openRouterStreamChoice `json:"choices"`
 }
 
+func isRetryableStatus(status int) bool {
+	return status == http.StatusTooManyRequests ||
+		status == http.StatusServiceUnavailable ||
+		status == http.StatusBadGateway ||
+		status == http.StatusGatewayTimeout ||
+		status == http.StatusInternalServerError
+}
+
+func (c *OpenRouterClient) doWithRetry(ctx context.Context, reqBody openRouterRequest) (*openRouterResponse, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= c.maxRetry; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 2 * time.Second
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(reqBody); err != nil {
+			return nil, fmt.Errorf("encode request: %w", err)
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", &buf)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+		resp, err := c.client.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("openrouter request failed: %w", err)
+			continue
+		}
+
+		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("read response body: %w", err)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("openrouter: authentication failed (401)")
+		}
+
+		if isRetryableStatus(resp.StatusCode) {
+			lastErr = fmt.Errorf("openrouter: returned status %d (attempt %d/%d)", resp.StatusCode, attempt+1, c.maxRetry+1)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("openrouter: returned status %d: %s", resp.StatusCode, string(bodyBytes[:min(len(bodyBytes), 500)]))
+		}
+
+		var openAIResp openRouterResponse
+		if err := json.Unmarshal(bodyBytes, &openAIResp); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+
+		if len(openAIResp.Choices) == 0 {
+			return nil, fmt.Errorf("openrouter: no choices returned")
+		}
+
+		return &openAIResp, nil
+	}
+
+	return nil, fmt.Errorf("openrouter: all %d attempts failed: %w", c.maxRetry+1, lastErr)
+}
+
 func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*model.ChatResponse, error) {
 	messages := make([]openRouterMessage, len(req.Messages))
 	for i, m := range req.Messages {
@@ -74,46 +156,21 @@ func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*mo
 		Stream:   false,
 	}
 
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(body); err != nil {
-		return nil, fmt.Errorf("encode request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", &buf)
+	openAIResp, err := c.doWithRetry(ctx, body)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("openrouter request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("openrouter: authentication failed (401)")
+		return nil, err
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openrouter: returned status %d", resp.StatusCode)
-	}
-
-	var openAIResp openRouterResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	if len(openAIResp.Choices) == 0 {
-		return nil, fmt.Errorf("openrouter: no choices returned")
+	content := openAIResp.Choices[0].Message.Content
+	if content == "" {
+		content = openAIResp.Choices[0].Message.ReasoningContent
 	}
 
 	return &model.ChatResponse{
 		Model: openAIResp.Model,
 		Message: model.Message{
 			Role:    openAIResp.Choices[0].Message.Role,
-			Content: openAIResp.Choices[0].Message.Content,
+			Content: content,
 		},
 		Done: true,
 	}, nil
@@ -214,4 +271,8 @@ func (c *OpenRouterClient) StreamAndParse(ctx context.Context, req model.ChatReq
 
 func (c *OpenRouterClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	return nil, fmt.Errorf("embed not supported by OpenRouter")
+}
+
+func (c *OpenRouterClient) Model() string {
+	return c.model
 }

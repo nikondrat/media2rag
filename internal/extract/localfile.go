@@ -45,3 +45,32 @@ func stripFrontmatter(content string) string {
 	}
 	return content
 }
+
+func ParseFrontmatter(content string) map[string]string {
+	meta := make(map[string]string)
+	content = strings.TrimLeft(content, "\n\r\t ")
+	if !strings.HasPrefix(content, "---") {
+		return meta
+	}
+	rest := content[3:]
+	idx := strings.Index(rest, "---")
+	if idx < 0 {
+		return meta
+	}
+	fm := rest[:idx]
+	for _, line := range strings.Split(fm, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		val = strings.Trim(val, "\"'")
+		meta[key] = val
+	}
+	return meta
+}

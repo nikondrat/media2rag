@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"media2rag/internal/model"
 )
@@ -43,13 +45,79 @@ func (e *NoopEmitter) Emit(model.Event) {}
 
 func (e *NoopEmitter) Done() {}
 
-type HumanEmitter struct{}
+type TeeEmitter struct {
+	inner EventEmitter
+	file  *os.File
+	mu    sync.Mutex
+}
+
+func NewTeeEmitter(inner EventEmitter, logPath string) (*TeeEmitter, error) {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return nil, fmt.Errorf("create log dir: %w", err)
+	}
+	f, err := os.Create(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("create log file: %w", err)
+	}
+	return &TeeEmitter{inner: inner, file: f}, nil
+}
+
+func (e *TeeEmitter) Emit(evt model.Event) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	line := fmt.Sprintf("[%s] %s", time.Now().Format(time.RFC3339), formatEvent(&evt))
+	fmt.Fprintln(e.file, line)
+
+	e.inner.Emit(evt)
+}
+
+func (e *TeeEmitter) Done() {
+	e.inner.Done()
+	if e.file != nil {
+		e.file.Close()
+	}
+}
+
+func formatEvent(evt *model.Event) string {
+	if evt.Error != "" {
+		return "ERROR: " + evt.Error
+	}
+	detail := evt.Type
+	switch d := evt.Data.(type) {
+	case map[string]int:
+		for k, v := range d {
+			detail += fmt.Sprintf(" %s=%d", k, v)
+		}
+	case map[string]string:
+		for k, v := range d {
+			if len(v) > 80 {
+				v = v[:80] + "..."
+			}
+			detail += fmt.Sprintf(" %s=%s", k, v)
+		}
+	case map[string]interface{}:
+		for k, v := range d {
+			detail += fmt.Sprintf(" %s=%v", k, v)
+		}
+	}
+	return detail
+}
+
+
+
+type HumanEmitter struct {
+	mu sync.Mutex
+}
 
 func NewHumanEmitter() *HumanEmitter {
 	return &HumanEmitter{}
 }
 
 func (e *HumanEmitter) Emit(evt model.Event) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	switch evt.Type {
 	case "extracting":
 		source, _ := evt.Data.(map[string]string)["source"]
@@ -60,6 +128,14 @@ func (e *HumanEmitter) Emit(evt model.Event) {
 		fmt.Fprintf(os.Stderr, "saving to workspace...\n")
 	case "pipeline_start":
 		fmt.Fprintf(os.Stderr, "pipeline: starting...\n")
+	case "pre_clean":
+		fmt.Fprintf(os.Stderr, "pipeline: pre-cleaning document...\n")
+	case "pre_clean_done":
+		if data, ok := evt.Data.(map[string]int); ok {
+			fmt.Fprintf(os.Stderr, "pipeline: pre-cleaned %d chars\n", data["text_length"])
+		} else {
+			fmt.Fprintf(os.Stderr, "pipeline: pre-clean done\n")
+		}
 	case "compression_start":
 		fmt.Fprintf(os.Stderr, "pipeline: compressing...\n")
 	case "cleaning_part":
@@ -90,6 +166,14 @@ func (e *HumanEmitter) Emit(evt model.Event) {
 		fmt.Fprintf(os.Stderr, "pipeline: holistic analysis...\n")
 	case "holistic_done":
 		fmt.Fprintf(os.Stderr, "pipeline: holistic analysis done\n")
+	case "context_enrichment":
+		fmt.Fprintf(os.Stderr, "pipeline: enriching chunks with context...\n")
+	case "context_enrichment_done":
+		if data, ok := evt.Data.(map[string]int); ok {
+			fmt.Fprintf(os.Stderr, "pipeline: chunk %d context enriched\n", data["chunk"])
+		} else {
+			fmt.Fprintf(os.Stderr, "pipeline: context enrichment done\n")
+		}
 	case "assembling":
 		fmt.Fprintf(os.Stderr, "pipeline: assembling...\n")
 	case "pipeline_completed":

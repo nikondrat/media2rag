@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"media2rag/internal/model"
 )
@@ -19,11 +20,14 @@ type OllamaClient struct {
 	client  *http.Client
 }
 
-func NewOllamaClient(baseURL, model string) *OllamaClient {
+func NewOllamaClient(baseURL, model string, timeout time.Duration) *OllamaClient {
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
 	return &OllamaClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: timeout},
 	}
 }
 

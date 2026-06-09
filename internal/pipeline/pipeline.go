@@ -2,8 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"media2rag/internal/events"
@@ -12,70 +16,92 @@ import (
 )
 
 const (
-	EventPipelineStart        = "pipeline_start"
-	EventCompressionStart     = "compression_start"
-	EventCleaningPart         = "cleaning_part"
-	EventCompressionDone      = "compression_done"
-	EventSplitting            = "splitting"
-	EventSplitDone            = "split_done"
-	EventProcessingStart      = "processing_start"
-	EventProcessingChunk      = "processing_chunk"
-	EventProcessingChunkDone  = "processing_chunk_done"
-	EventProcessingDone       = "processing_done"
-	EventHolisticAnalysis     = "holistic_analysis"
-	EventHolisticDone         = "holistic_done"
-	EventAssembling           = "assembling"
-	EventPipelineCompleted    = "pipeline_completed"
-	EventCheckpointRestore    = "checkpoint_restore"
+	EventPipelineStart       = "pipeline_start"
+	EventPreClean            = "pre_clean"
+	EventPreCleanDone        = "pre_clean_done"
+	EventCleaningPart        = "cleaning_part"
+	EventSplitting           = "splitting"
+	EventSplitDone           = "split_done"
+	EventProcessingStart     = "processing_start"
+	EventProcessingChunk     = "processing_chunk"
+	EventProcessingChunkDone = "processing_chunk_done"
+	EventProcessingDone      = "processing_done"
+	EventHolisticAnalysis    = "holistic_analysis"
+	EventHolisticDone        = "holistic_done"
+	EventContextEnrich       = "context_enrichment"
+	EventContextEnrichDone   = "context_enrichment_done"
+	EventAssembling          = "assembling"
+	EventPipelineCompleted   = "pipeline_completed"
+	EventCheckpointRestore   = "checkpoint_restore"
 )
 
-const holisticPrompt = `Analyze the following document and extract:
-- core_thesis: The single central thesis or main argument of the entire document
-- domains: Comma-separated list of knowledge domains (e.g. technology, business, law, science, medicine)
+const cleaningPrompt = `You are a text cleaning assistant. Clean the following text by:
+1. Removing timestamps (e.g. "0:00", "12:34", "[Music]", "[Applause]")
+2. Removing advertisements and promotional content
+3. Removing duplicate lines or paragraphs
+4. Removing OCR artifacts and garbled text
+5. Preserving all meaningful content including technical terms and code
 
-Return in this exact format:
+IMPORTANT: Preserve the original language of the text. Do NOT translate.
+Return only the cleaned text with no additional commentary.`
+
+const holisticPrompt = `Analyze the following document summaries and extract:
+- core_thesis: The single central thesis or main argument of the entire document (in the original language of the document, 1-2 sentences)
+- domains: Comma-separated list of knowledge domains relevant to the content (e.g. business, technology, marketing, psychology, management, entrepreneurship, personal-development, leadership)
+
+Return in this exact format (using the original language of the document):
 core_thesis: <thesis statement>
 domains: <domain1, domain2, ...>`
 
+const contextEnrichPrompt = `You are given a chunk of text extracted from a larger document, along with a brief summary of the entire document. Your task is to write a short context (1-2 sentences) that situates this chunk within the broader document, so that someone reading only this chunk can understand what document it comes from and what the chunk is about in context.
+
+IMPORTANT:
+- Write in the same language as the chunk
+- Keep it concise: 1-2 sentences maximum
+- Include the document topic/main theme
+- Do NOT repeat the chunk content — only add surrounding context
+- Do NOT add any headers, labels, or formatting — just the context sentence(s)
+
+Example input:
+Document summary: A lecture about scaling a construction business to 1M profit, covering sales funnels, lead generation, and team building.
+Chunk: "The goal is to get 15-20 measurements per week. At the meeting, you propose a contract and a prepayment."
+
+Example output:
+This is from a lecture on scaling a construction business to 1 million rubles profit, discussing the key stage of the sales funnel — getting measurements and signing contracts with prepayment.`
+
 type ChunkResult struct {
-	Index        int            `json:"index"`
-	Title        string         `json:"title"`
-	Topics       []string       `json:"topics"`
-	Summary      string         `json:"summary"`
-	Content      string         `json:"content"`
-	Claims       []model.Claim  `json:"claims,omitempty"`
-	MentalModels []string       `json:"mental_models,omitempty"`
-	KeyTerms     []model.KeyTerm `json:"key_terms,omitempty"`
-	CoreThesis   string         `json:"core_thesis,omitempty"`
-	Takeaways    []string       `json:"takeaways,omitempty"`
-	Domains      []string       `json:"domains,omitempty"`
+	Index         int      `json:"index"`
+	Title         string   `json:"title"`
+	Type          string   `json:"type"`
+	Topic         string   `json:"topic"`
+	Topics        []string `json:"topics"`
+	Summary       string   `json:"summary"`
+	Content       string   `json:"content"`
+	Context       string   `json:"context,omitempty"`
+	KeyPoints     []string `json:"key_points,omitempty"`
+	SourceQuote   string   `json:"source_quote,omitempty"`
+	MyTakeaway    string   `json:"my_takeaway,omitempty"`
+	Confidence    float64  `json:"confidence,omitempty"`
+	Applicability string   `json:"applicability,omitempty"`
+	Steps         []string `json:"steps,omitempty"`
+	Domains       []string `json:"domains,omitempty"`
 }
 
 type PipelineConfig struct {
-	ChunkSize           int           `json:"chunk_size"`
-	ChunkOverlap        int           `json:"chunk_overlap"`
-	MaxConcurrency      int           `json:"max_concurrency"`
-	LLMTimeout          time.Duration `json:"llm_timeout"`
-	ExtractClaims       bool          `json:"extract_claims"`
-	ExtractMentalModels bool          `json:"extract_mental_models"`
-	ExtractKeyTerms     bool          `json:"extract_key_terms"`
-	ExtractCoreThesis   bool          `json:"extract_core_thesis"`
-	ExtractTakeaways    bool          `json:"extract_takeaways"`
-	HolisticAnalysis    bool          `json:"holistic_analysis"`
+	ChunkSize        int           `json:"chunk_size"`
+	ChunkOverlap     int           `json:"chunk_overlap"`
+	MaxConcurrency   int           `json:"max_concurrency"`
+	LLMTimeout       time.Duration `json:"llm_timeout"`
+	HolisticAnalysis bool          `json:"holistic_analysis"`
 }
 
 func DefaultConfig() PipelineConfig {
 	return PipelineConfig{
-		ChunkSize:           2000,
-		ChunkOverlap:        200,
-		MaxConcurrency:      3,
-		LLMTimeout:          120 * time.Second,
-		ExtractClaims:       true,
-		ExtractMentalModels: true,
-		ExtractKeyTerms:     true,
-		ExtractCoreThesis:   true,
-		ExtractTakeaways:    true,
-		HolisticAnalysis:    true,
+		ChunkSize:        1500,
+		ChunkOverlap:     200,
+		MaxConcurrency:   3,
+		LLMTimeout:       120 * time.Second,
+		HolisticAnalysis: true,
 	}
 }
 
@@ -83,18 +109,18 @@ type Pipeline struct {
 	config        PipelineConfig
 	llmClient     llm.LLMClient
 	checkpointDir string
+	outputDir     string
+	status        *PipelineStatus
 	source        string
 	docType       string
 	author        string
 	language      string
-	runID         string
-	tracer        Tracer
 	model         string
 }
 
 func New(cfg PipelineConfig, client llm.LLMClient) *Pipeline {
 	if cfg.ChunkSize <= 0 {
-		cfg.ChunkSize = 2000
+		cfg.ChunkSize = 1500
 	}
 	if cfg.ChunkOverlap <= 0 {
 		cfg.ChunkOverlap = 200
@@ -113,19 +139,19 @@ func New(cfg PipelineConfig, client llm.LLMClient) *Pipeline {
 		}
 	}
 
-	return &Pipeline{config: cfg, llmClient: client, model: modelName}
+	return &Pipeline{
+		config:    cfg,
+		llmClient: client,
+		model:     modelName,
+	}
 }
 
 func (p *Pipeline) SetCheckpointDir(dir string) {
 	p.checkpointDir = dir
 }
 
-func (p *Pipeline) SetTracer(t Tracer) {
-	p.tracer = t
-}
-
-func (p *Pipeline) SetRunID(id string) {
-	p.runID = id
+func (p *Pipeline) SetOutputDir(dir string) {
+	p.outputDir = dir
 }
 
 func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter events.EventEmitter) (*model.RAGDocument, error) {
@@ -134,135 +160,109 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 	p.author = ec.Author
 	p.language = ec.Language
 
+	if p.outputDir != "" {
+		_ = os.MkdirAll(p.outputDir, 0755)
+		_ = os.MkdirAll(filepath.Join(p.outputDir, "intermediate"), 0755)
+		_ = os.MkdirAll(filepath.Join(p.outputDir, "chunks"), 0755)
+		_ = os.MkdirAll(filepath.Join(p.outputDir, "results"), 0755)
+		_ = os.MkdirAll(filepath.Join(p.outputDir, "output"), 0755)
+		p.status = NewStatus(p.outputDir, ec.Source)
+	}
+
 	emitter.Emit(model.Event{Type: EventPipelineStart, Data: map[string]int{"text_length": len(ec.Content)}})
 
-	stageScore := 0.95
-	errStr := ""
-	totalTokens := 0
+	if p.outputDir != "" {
+		rawPath := filepath.Join(p.outputDir, "intermediate", "raw.md")
+		_ = os.WriteFile(rawPath, []byte(ec.Content), 0644)
+	}
 
-	emitter.Emit(model.Event{Type: EventCompressionStart})
-	startCompress := time.Now()
-	cleaned, err := p.compress(ctx, ec.Content, emitter)
-	compressMs := int(time.Since(startCompress).Milliseconds())
+	cleaned, err := p.preClean(ctx, ec.Content, emitter)
 	if err != nil {
-		return nil, fmt.Errorf("compressor: %w", err)
+		if p.status != nil {
+			p.status.SetFailed(err.Error())
+		}
+		return nil, fmt.Errorf("pre-clean: %w", err)
 	}
-	emitter.Emit(model.Event{Type: EventCompressionDone, Data: map[string]int{"cleaned_length": len(cleaned)}})
-	totalTokens += len(cleaned) / 4
 
-	if p.tracer != nil && p.runID != "" {
-		p.tracer.SaveStage(TraceEntry{
-			RunID: p.runID, StageName: "compress", Seq: 1,
-			Prompt: cleaningPrompt, Response: cleaned,
-			TokensIn: len(ec.Content) / 4, TokensOut: len(cleaned) / 4,
-			LatencyMs: compressMs, Score: stageScore, Model: p.model,
-		})
-		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
-			"run_id": p.runID, "stage": "compress", "score": stageScore, "latency_ms": compressMs,
-		})
+	if p.outputDir != "" {
+		_ = os.WriteFile(filepath.Join(p.outputDir, "intermediate", "cleaned.md"), []byte(cleaned), 0644)
 	}
+	emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
 
 	emitter.Emit(model.Event{Type: EventSplitting})
-	startSplit := time.Now()
-	chunks := p.splitText(cleaned)
-	splitMs := int(time.Since(startSplit).Milliseconds())
-	emitter.Emit(model.Event{Type: EventSplitDone, Data: map[string]int{"chunks": len(chunks)}})
+	rawChunks, err := p.splitText(cleaned)
+	if err != nil {
+		if p.status != nil {
+			p.status.SetFailed(err.Error())
+		}
+		return nil, fmt.Errorf("splitter: %w", err)
+	}
+	if p.outputDir != "" {
+		for i, chunk := range rawChunks {
+			name := fmt.Sprintf("chunk_%03d.md", i+1)
+			_ = os.WriteFile(filepath.Join(p.outputDir, "chunks", name), []byte(chunk), 0644)
+		}
+	}
+	emitter.Emit(model.Event{Type: EventSplitDone, Data: map[string]int{"chunks": len(rawChunks)}})
 
-	if p.tracer != nil && p.runID != "" {
-		p.tracer.SaveStage(TraceEntry{
-			RunID: p.runID, StageName: "split", Seq: 2,
-			TokensIn: len(cleaned) / 4, TokensOut: 0,
-			LatencyMs: splitMs, Score: 1.0, Model: "",
-		})
-		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
-			"run_id": p.runID, "stage": "split", "score": 1.0, "latency_ms": splitMs,
-		})
+	if p.status != nil {
+		p.status.SetChunks(len(rawChunks))
+		p.status.SetStage(StageProcessing)
 	}
 
-	emitter.Emit(model.Event{Type: EventProcessingStart, Data: map[string]int{"total": len(chunks)}})
-	startProcess := time.Now()
-	results, err := p.processChunks(ctx, chunks, emitter)
-	processMs := int(time.Since(startProcess).Milliseconds())
+	emitter.Emit(model.Event{Type: EventProcessingStart, Data: map[string]int{"total": len(rawChunks)}})
+	results, err := p.processChunks(ctx, rawChunks, emitter)
 	if err != nil {
-		errStr = err.Error()
-		if p.tracer != nil && p.runID != "" {
-			p.tracer.SaveStage(TraceEntry{
-				RunID: p.runID, StageName: "process", Seq: 3,
-				Prompt: chunkPrompt, Response: errStr,
-				TokensIn: len(cleaned) / 4, TokensOut: 0,
-				LatencyMs: processMs, Score: 0, Model: p.model, Error: errStr,
-			})
+		if p.status != nil {
+			p.status.SetFailed(err.Error())
 		}
 		return nil, fmt.Errorf("processor: %w", err)
 	}
 	emitter.Emit(model.Event{Type: EventProcessingDone})
-
-	processResp := fmt.Sprintf("processed %d chunks, %d results", len(chunks), len(results))
-	if p.tracer != nil && p.runID != "" {
-		p.tracer.SaveStage(TraceEntry{
-			RunID: p.runID, StageName: "process", Seq: 3,
-			Prompt: chunkPrompt, Response: processResp,
-			TokensIn: len(cleaned) / 4, TokensOut: totalTokens,
-			LatencyMs: processMs, Score: stageScore, Model: p.model,
-		})
-		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
-			"run_id": p.runID, "stage": "process", "score": stageScore, "latency_ms": processMs,
-		})
-	}
 
 	var holistic struct {
 		coreThesis string
 		domains    []string
 	}
 	if p.config.HolisticAnalysis {
+		if p.status != nil {
+			p.status.SetStage(StageHolistic)
+		}
 		emitter.Emit(model.Event{Type: EventHolisticAnalysis})
-		startHolistic := time.Now()
-		holistic.coreThesis, holistic.domains, err = p.holisticAnalysis(ctx, cleaned)
-		holisticMs := int(time.Since(startHolistic).Milliseconds())
+		holistic.coreThesis, holistic.domains, err = p.holisticAnalysis(ctx, results)
 		if err != nil {
-			if p.tracer != nil && p.runID != "" {
-				p.tracer.SaveLLMCall(p.runID, p.model, "holistic", len(cleaned)/4, 0, holisticMs, 0, holisticPrompt, "", "error", err.Error())
+			if p.status != nil {
+				p.status.SetFailed(err.Error())
 			}
 			return nil, fmt.Errorf("holistic: %w", err)
 		}
-		emitter.Emit(model.Event{Type: EventHolisticDone})
-
-		if p.tracer != nil && p.runID != "" {
-			holisticResp := fmt.Sprintf("core_thesis: %s\ndomains: %s", holistic.coreThesis, strings.Join(holistic.domains, ", "))
-			p.tracer.SaveLLMCall(p.runID, p.model, "holistic", len(cleaned)/4, len(holisticResp)/4, holisticMs, 0, holisticPrompt, holisticResp, "success", "")
-			p.tracer.SaveStage(TraceEntry{
-				RunID: p.runID, StageName: "holistic", Seq: 4,
-				Prompt: holisticPrompt, Response: holisticResp,
-				TokensIn: len(cleaned) / 4, TokensOut: 0,
-				LatencyMs: holisticMs, Score: 1.0, Model: p.model,
-			})
-			p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
-				"run_id": p.runID, "stage": "holistic", "score": 1.0, "latency_ms": holisticMs,
-			})
+		if p.outputDir != "" {
+			_ = os.WriteFile(filepath.Join(p.outputDir, "intermediate", "holistic.md"), []byte(holistic.coreThesis+"\n\nDomains: "+strings.Join(holistic.domains, ", ")), 0644)
 		}
+		emitter.Emit(model.Event{Type: EventHolisticDone})
 	}
 
+	emitter.Emit(model.Event{Type: EventContextEnrich})
+	if err := p.contextualEnrich(ctx, results, holistic.coreThesis, emitter); err != nil {
+		emitter.Emit(model.Event{Type: "context_enrichment_error", Data: map[string]string{"error": err.Error()}})
+	}
+	emitter.Emit(model.Event{Type: EventContextEnrichDone})
+
 	emitter.Emit(model.Event{Type: EventAssembling})
-	startAssemble := time.Now()
-	doc := assemble(results, cleaned, assembleOpts{
+	doc := assemble(results, assembleOpts{
 		source:     p.source,
 		docType:    p.docType,
 		author:     p.author,
 		language:   p.language,
-		coreThesis: holistic.coreThesis,
 		domains:    holistic.domains,
+		coreThesis: holistic.coreThesis,
 	})
-	assembleMs := int(time.Since(startAssemble).Milliseconds())
+	doc.CleanedText = cleaned
+	doc.Metadata.CoreThesis = holistic.coreThesis
 
-	if p.tracer != nil && p.runID != "" {
-		p.tracer.SaveStage(TraceEntry{
-			RunID: p.runID, StageName: "assemble", Seq: 5,
-			TokensIn: totalTokens, TokensOut: len(doc.Markdown) / 4,
-			LatencyMs: assembleMs, Score: 1.0, Model: "",
-		})
-		p.tracer.BroadcastEvent("stage_complete", map[string]interface{}{
-			"run_id": p.runID, "stage": "assemble", "score": 1.0, "latency_ms": assembleMs,
-		})
+	if p.outputDir != "" {
+		_ = os.WriteFile(filepath.Join(p.outputDir, "output", "final.md"), []byte(doc.Markdown), 0644)
+		p.status.SetStage(StageDone)
 	}
 
 	emitter.Emit(model.Event{Type: EventPipelineCompleted, Data: map[string]interface{}{
@@ -278,13 +278,194 @@ func (p *Pipeline) RunString(ctx context.Context, rawText string, emitter events
 	return p.Run(ctx, model.ExtractedContent{Content: rawText}, emitter)
 }
 
-func (p *Pipeline) holisticAnalysis(ctx context.Context, cleaned string) (string, []string, error) {
+func (p *Pipeline) contextualEnrich(ctx context.Context, results []ChunkResult, docContext string, emitter events.EventEmitter) error {
+	docSummary := docContext
+	if docSummary == "" {
+		var topics []string
+		for _, r := range results {
+			if r.Topic != "" {
+				topics = append(topics, r.Topic)
+			}
+		}
+		if len(topics) > 0 {
+			unique := map[string]bool{}
+			var deduped []string
+			for _, t := range topics {
+				if !unique[t] {
+					unique[t] = true
+					deduped = append(deduped, t)
+				}
+			}
+			docSummary = "Document covering: " + strings.Join(deduped[:min(5, len(deduped))], ", ")
+		}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type job struct {
+		index int
+	}
+	jobs := make(chan job, len(results))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	numWorkers := p.config.MaxConcurrency
+	if numWorkers <= 0 {
+		numWorkers = 3
+	}
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				r := &results[j.index]
+				if r.Content == "" || r.Summary == "" {
+					continue
+				}
+
+				chunkContext, err := p.enrichSingle(ctx, docSummary, r)
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					mu.Unlock()
+					return
+				}
+
+				mu.Lock()
+				r.Context = chunkContext
+				p.writeResultJSON(*r)
+				mu.Unlock()
+
+				emitter.Emit(model.Event{Type: EventContextEnrichDone, Data: map[string]int{"chunk": j.index + 1}})
+			}
+		}()
+	}
+
+	for i := range results {
+		jobs <- job{index: i}
+	}
+	close(jobs)
+	wg.Wait()
+
+	return firstErr
+}
+
+func (p *Pipeline) enrichSingle(ctx context.Context, docSummary string, r *ChunkResult) (string, error) {
+	callCtx, cancel := p.timeoutCtx(ctx)
+	defer cancel()
+
+	content := r.Content
+	if len(content) > 1000 {
+		content = content[:1000]
+	}
+
+	userMsg := fmt.Sprintf("Document summary: %s\n\nChunk content:\n%s", docSummary, content)
+	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+		Messages: []model.Message{
+			{Role: "system", Content: contextEnrichPrompt},
+			{Role: "user", Content: userMsg},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(resp.Message.Content), nil
+}
+
+func (p *Pipeline) preClean(ctx context.Context, text string, emitter events.EventEmitter) (string, error) {
+	if p.status != nil && p.status.Stage != "" && p.status.Stage != StageExtracted {
+		if data, err := os.ReadFile(filepath.Join(p.outputDir, "intermediate", "cleaned.md")); err == nil {
+			emitter.Emit(model.Event{Type: EventCheckpointRestore, Data: map[string]string{"stage": "cleaned"}})
+			return string(data), nil
+		}
+	}
+
+	if p.checkpointDir != "" {
+		if data, err := loadCheckpointFile(p.checkpointDir, "cleaned.md"); err == nil {
+			emitter.Emit(model.Event{Type: EventCheckpointRestore, Data: map[string]string{"stage": "cleaned"}})
+			return string(data), nil
+		}
+	}
+
+	emitter.Emit(model.Event{Type: EventPreClean})
+
+	var cleaned string
+	var err error
+
+	if len(text) <= maxCompressLen {
+		cleaned, err = p.cleanSinglePart(ctx, text)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		parts := splitParagraphParts(text, maxCompressLen)
+		var cleanedParts []string
+		for i, part := range parts {
+			emitter.Emit(model.Event{Type: EventCleaningPart, Data: map[string]int{"part": i + 1, "total": len(parts)}})
+			result, err := p.cleanSinglePart(ctx, part)
+			if err != nil {
+				return "", fmt.Errorf("clean part %d/%d: %w", i+1, len(parts), err)
+			}
+			cleanedParts = append(cleanedParts, result)
+		}
+		cleaned = strings.Join(cleanedParts, "\n\n")
+	}
+
+	if p.checkpointDir != "" {
+		_ = saveCheckpointFile(p.checkpointDir, "cleaned.md", []byte(cleaned))
+	}
+
+	if p.status != nil {
+		p.status.SetStage(StageCleaned)
+	}
+
+	return cleaned, nil
+}
+
+func (p *Pipeline) cleanSinglePart(ctx context.Context, text string) (string, error) {
+	callCtx, cancel := p.timeoutCtx(ctx)
+	defer cancel()
+	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+		Messages: []model.Message{
+			{Role: "system", Content: cleaningPrompt},
+			{Role: "user", Content: text},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Message.Content, nil
+}
+
+func (p *Pipeline) holisticAnalysis(ctx context.Context, results []ChunkResult) (string, []string, error) {
+	var summaries []string
+	for _, r := range results {
+		if r.Summary != "" {
+			summaries = append(summaries, r.Summary)
+		}
+	}
+	if len(summaries) == 0 {
+		return "", nil, nil
+	}
+
+	combined := strings.Join(summaries, "\n\n")
 	callCtx, cancel := p.timeoutCtx(ctx)
 	defer cancel()
 	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
 		Messages: []model.Message{
 			{Role: "system", Content: holisticPrompt},
-			{Role: "user", Content: cleaned},
+			{Role: "user", Content: combined},
 		},
 	})
 	if err != nil {
@@ -309,4 +490,69 @@ func (p *Pipeline) holisticAnalysis(ctx context.Context, cleaned string) (string
 		}
 	}
 	return coreThesis, domains, nil
+}
+
+func (p *Pipeline) timeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if p.config.LLMTimeout > 0 {
+		return context.WithTimeout(ctx, p.config.LLMTimeout)
+	}
+	return ctx, func() {}
+}
+
+func (p *Pipeline) writeResultJSON(result ChunkResult) {
+	if p.outputDir == "" {
+		return
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return
+	}
+	name := fmt.Sprintf("result_%03d.json", result.Index+1)
+	_ = os.WriteFile(filepath.Join(p.outputDir, "results", name), data, 0644)
+}
+
+const maxCompressLen = 28000
+
+func splitParagraphParts(text string, maxLen int) []string {
+	if len(text) <= maxLen {
+		return []string{text}
+	}
+
+	var parts []string
+	for len(text) > 0 {
+		if len(text) <= maxLen {
+			parts = append(parts, text)
+			break
+		}
+
+		cut := text[:maxLen]
+		lastPara := strings.LastIndex(cut, "\n\n")
+		if lastPara > maxLen/2 {
+			parts = append(parts, text[:lastPara])
+			text = text[lastPara:]
+			continue
+		}
+
+		lastNewline := strings.LastIndex(cut, "\n")
+		if lastNewline > maxLen/2 {
+			parts = append(parts, text[:lastNewline])
+			text = text[lastNewline:]
+			continue
+		}
+
+		parts = append(parts, cut)
+		text = text[maxLen:]
+	}
+	return parts
+}
+
+func loadCheckpointFile(dir, name string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(dir, name))
+}
+
+func saveCheckpointFile(dir, name string, data []byte) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create checkpoint dir: %w", err)
+	}
+	return os.WriteFile(filepath.Join(dir, name), data, 0644)
 }
