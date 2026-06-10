@@ -13,7 +13,7 @@
 | Telemetry + Pricing | ✅ Работает |
 | LLM parsing (robust) | ⚠️ Улучшено, multi-line поля ещё хрупкие |
 | Batch statistics | ⏳ Только базовые (processed/skipped/failed) |
-| RAG + GraphRAG команды | 🔧 Causal extraction в pipeline есть, CLI команд нет |
+| RAG + GraphRAG команды | ✅ CLI команды реализованы |
 | New formats (PDF, audio...) | ❌ Пока .md + URL |
 
 ## Phase 1: CLI стабилизация (Now)
@@ -32,16 +32,22 @@
 
 ---
 
-## Phase 2: RAG + GraphRAG (CLI команды)
+## Phase 2: RAG + GraphRAG (CLI команды) ✅ COMPLETE
 
 **Цель:** Каузальный поиск по знаниям.
 
-### Задачи
-- Восстановить Qdrant из git
-- Команда `media2rag rag <query>` — векторный поиск
-- Knowledge Graph extraction из chunks (causal_chain, preconditions)
-- Команда `media2rag graphrag <query>` — обход графа 2-3 hop
-- JSON output для AI агентов (Hermes и др.)
+### Реализовано
+- [x] Qdrant client (HTTP API)
+- [x] Команда `media2rag index` — индексация chunks в Qdrant + построение Knowledge Graph
+- [x] Команда `media2rag rag <query>` — hybrid search (dense + sparse + RRF)
+- [x] Knowledge Graph extraction из chunks (12 entity types, 14 relation types)
+- [x] Entity deduplication (embedding similarity + LLM resolution)
+- [x] Community detection (topic-based clustering + LLM summaries)
+- [x] Query Rewriter (natural language → structured query)
+- [x] Команда `media2rag graphrag <query>` — local + global + DRIFT search
+- [x] JSON output для AI агентов (Hermes и др.)
+- [x] Graph storage (JSON adjacency list with indexes)
+- [x] Graph validation (no orphan edges, valid types)
 
 **Метрика:** Запрос "какой бизнес в логистике" возвращает цепочку: проблема → решение → возможность.
 

@@ -287,7 +287,64 @@ func (c *OpenRouterClient) StreamAndParse(ctx context.Context, req model.ChatReq
 }
 
 func (c *OpenRouterClient) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, fmt.Errorf("embed not supported by OpenRouter")
+	// Try /v1/embeddings endpoint (works with LM Studio, Ollama-compatible servers)
+	type embedInput struct {
+		Model string   `json:"model"`
+		Input []string `json:"input"`
+	}
+	type embedData struct {
+		Object    string    `json:"object"`
+		Embedding []float32 `json:"embedding"`
+		Index     int       `json:"index"`
+	}
+	type embedResponse struct {
+		Data []embedData `json:"data"`
+	}
+
+	reqBody := embedInput{
+		Model: c.model,
+		Input: []string{text},
+	}
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(reqBody); err != nil {
+		return nil, fmt.Errorf("encode embed request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/embeddings", &buf)
+	if err != nil {
+		return nil, fmt.Errorf("create embed request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("embed request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read embed response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("embed error (%d): %s", resp.StatusCode, string(bodyBytes[:min(len(bodyBytes), 200)]))
+	}
+
+	var embedResp embedResponse
+	if err := json.Unmarshal(bodyBytes, &embedResp); err != nil {
+		return nil, fmt.Errorf("decode embed response: %w", err)
+	}
+
+	if len(embedResp.Data) == 0 {
+		return nil, fmt.Errorf("no embeddings returned")
+	}
+
+	return embedResp.Data[0].Embedding, nil
 }
 
 func (c *OpenRouterClient) Model() string {

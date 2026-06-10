@@ -30,12 +30,14 @@ type ProgressEmitter struct {
 	stage      string
 	start      time.Time
 	compDur    time.Duration
+	barClosed  bool
+	doneCount  int
 }
 
 func NewProgressEmitter(total int, concurrency int) *ProgressEmitter {
 	e := &ProgressEmitter{
 		total:  total,
-		ch:     make(chan model.Event, 200),
+		ch:     make(chan model.Event, 4096),
 		doneCh: make(chan struct{}),
 		barCh:  make(chan struct{}),
 		start:  time.Now(),
@@ -111,21 +113,56 @@ func (e *ProgressEmitter) Emit(evt model.Event) {
 func (e *ProgressEmitter) Done() {}
 
 func (e *ProgressEmitter) FileStart(name string) {
-	e.ch <- model.Event{Type: "file_start", Data: map[string]string{"name": name}}
+	select {
+	case e.ch <- model.Event{Type: "file_start", Data: map[string]string{"name": name}}:
+	default:
+	}
 }
 
 func (e *ProgressEmitter) FileDone(name string) {
-	e.ch <- model.Event{Type: "file_done", Data: map[string]string{"name": name}}
+	select {
+	case e.ch <- model.Event{Type: "file_done", Data: map[string]string{"name": name}}:
+	default:
+	}
+	e.countDone()
 }
 
 func (e *ProgressEmitter) FileSkipped(name string) {
-	e.ch <- model.Event{Type: "file_skip", Data: map[string]string{"name": name}}
+	select {
+	case e.ch <- model.Event{Type: "file_skip", Data: map[string]string{"name": name}}:
+	default:
+	}
+	e.countDone()
 }
 
 func (e *ProgressEmitter) FileError(name string, err error) {
-	e.ch <- model.Event{Type: "file_error", Data: map[string]interface{}{
+	select {
+	case e.ch <- model.Event{Type: "file_error", Data: map[string]interface{}{
 		"name": name, "error": err.Error(),
-	}}
+	}}:
+	default:
+	}
+	e.countDone()
+}
+
+func (e *ProgressEmitter) countDone() {
+	e.stateMu.Lock()
+	e.doneCount++
+	if e.doneCount >= e.total {
+		e.closeBarLocked()
+	} else {
+		e.stateMu.Unlock()
+	}
+}
+
+func (e *ProgressEmitter) closeBarLocked() {
+	if !e.barClosed {
+		e.barClosed = true
+		e.stateMu.Unlock()
+		close(e.barCh)
+	} else {
+		e.stateMu.Unlock()
+	}
 }
 
 func (e *ProgressEmitter) Wait() {
@@ -166,7 +203,8 @@ func (e *ProgressEmitter) loop() {
 				e.bar.Increment()
 			}
 			if done {
-				close(e.barCh)
+				e.stateMu.Lock()
+				e.closeBarLocked()
 			}
 
 		case "file_skip":
@@ -178,7 +216,8 @@ func (e *ProgressEmitter) loop() {
 				e.bar.Increment()
 			}
 			if done {
-				close(e.barCh)
+				e.stateMu.Lock()
+				e.closeBarLocked()
 			}
 
 		case "file_error":
@@ -199,7 +238,8 @@ func (e *ProgressEmitter) loop() {
 			}
 			fmt.Fprintf(os.Stderr, "\nERROR: %s: %s\n", name, errStr)
 			if done {
-				close(e.barCh)
+				e.stateMu.Lock()
+				e.closeBarLocked()
 			}
 
 		default:

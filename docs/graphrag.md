@@ -331,6 +331,58 @@ Query: "как работает Kubernetes"
 
 ---
 
+## Сообщества (Communities) — Microsoft GraphRAG Best Practice
+
+### Что это
+
+После извлечения сущностей и связей, граф автоматически кластеризуется алгоритмом **Leiden** (hierarchical community detection).
+
+```
+Граф:
+  [Проблема X] → [Решение Y] → [Рынок Z]
+  [Проблема A] → [Решение B] → [Рынок Z]
+  [Технология C] → [Решение Y]
+
+Leiden clustering:
+  Community 0 (синий): {Проблема X, Решение Y, Технология C}
+  Community 1 (красный): {Проблема A, Решение B, Рынок Z}
+  Community 2 (зелёный): {Рынок Z, Рынок D, Рынок E}
+```
+
+### Зачем
+
+| Без communities | С communities |
+|-----------------|---------------|
+| Только local search ("что связано с X?") | + Global search ("какие топ-5 тем?") |
+| Нет holistic understanding | LLM summary для каждого кластера |
+| Query = entity lookup | Query = community + entity lookup |
+
+### Как работает
+
+1. **Build graph** → entities + relations из chunks
+2. **Leiden clustering** → иерархическая группировка (L0, L1, L2...)
+3. **Generate summaries** → LLM генерирует summary для каждого community
+4. **Query time:**
+   - **Global search:** использует community summaries для holistic вопросов
+   - **Local search:** fan-out от entity к соседям + community context
+
+### Наш подход: ДА, с реальной пользой
+
+**Реальная польза communities:**
+1. **Global search** — "какие топ-5 тем в базе?" → невозможно без community summaries
+2. **Holistic understanding** — summary кластера даёт контекст, которого нет в отдельных chunks
+3. **Query routing** — по community определяем область знаний вопроса
+
+**Реализация (упрощённая, 80% ценности):**
+1. **Community = topic** — chunks с одинаковым `topic` → одно сообщество
+2. **LLM summary** — генерируем summary для каждого topic-cluster
+3. **Иерархия** — `topics` → `domains` (LLM-генерация)
+
+Без этого: только local search ("что связано с X?")
+С этим: + global search ("какие топ-5 тем?")
+
+---
+
 ## Storage: Graph DB
 
 ### Варианты
@@ -347,28 +399,76 @@ Query: "как работает Kubernetes"
 ### Схема графа
 
 ```
-Node types:
-- Entity: {id, name, type, description}
-  types: person, company, concept, metric, technology, industry
-  
-- Event: {id, name, description, context}
+Node types (12 — фиксированное ядро + гибрид):
 
-- Framework: {id, name, description, steps[]}
+Базовые 8 (бизнес + универсальные):
+- Problem: {id, name, description, severity, domain}
+- Solution: {id, name, description, type, maturity}
+- Opportunity: {id, name, description, confidence, timeframe}
+- Skill: {id, name, description, level, relevance}
+- Resource: {id, name, source, type, date, chunk_ref}
+- Market: {id, name, description, size, growth}
+- Audience: {id, name, description, size, needs}
+- Business: {id, name, type, domain, competitors}
 
-Edge types:
-- causes: {from, to, mechanism, confidence}
-- enables: {from, to, condition}
-- prevents: {from, to, reason}
-- requires: {from, to, condition}
-- correlates: {from, to, strength}
-- example_of: {from, to}
-- part_of: {from, to}
-- contradicts: {from, to, explanation}
+Добавлены из GraphRAG best practices:
+- Event: {id, name, description, date, impact, source}
+- Claim: {id, statement, confidence, source, verified}
+- Metric: {id, name, value, unit, context}
+- Concept: {id, name, description, domain, mental_model}
+
+Edge types (14 — фиксированные):
+- causes: {from, to, mechanism, confidence, source_chunk}
+- enables: {from, to, condition, confidence, source_chunk}
+- prevents: {from, to, reason, confidence, source_chunk}
+- requires: {from, to, condition, confidence, source_chunk}
+- solves: {from, to, effectiveness, confidence, source_chunk}
+- blocks: {from, to, reason, confidence, source_chunk}
+- competes_with: {from, to, dimension, source_chunk}
+- serves: {from, to, segment, source_chunk}
+- leverages: {from, to, advantage, source_chunk}
+- leads_to: {from, to, timeframe, confidence, source_chunk}
+- correlates: {from, to, strength, source_chunk}
+- supports: {from, to, confidence, source_chunk}
+- contradicts: {from, to, explanation, source_chunk}
+- part_of: {from, to, source_chunk}
 ```
+
+### Provenance (из GraphRAG best practices)
+
+Каждая связь хранит `source_chunk` — ссылку на оригинальный chunk. Это позволяет:
+- Верифицировать ответ ("откуда это?")
+- Audit LLM output
+- Показать пользователю источник
 
 ---
 
 ## Query Engine
+
+### Global vs Local Search (GraphRAG best practice)
+
+**Local Search** — ответ на конкретный вопрос:
+```
+Query: "почему компании банкротятся"
+→ Найти entity "банкротство"
+→ Fan-out к соседям (incoming: causes)
+→ Вернуть цепочку причин + community context
+```
+
+**Global Search** — holistic вопрос по всей базе:
+```
+Query: "какие топ-5 тем в базе"
+→ Использовать community summaries
+→ LLM ранжирует и агрегирует
+→ Вернуть топ-5 тем с provenance
+```
+
+**DRIFT Search** (GraphRAG extension):
+```
+Local search + community context
+→ "как решить X" → fan-out от X + summary сообщества
+→ Более релевантный ответ с контекстом
+```
 
 ### Алгоритм обхода графа
 
@@ -409,3 +509,66 @@ Filter:
   - исключить chains с "пищевая лицензия"
   - приоритет chains с "автоматизация"
 ```
+
+---
+
+## Гибридный подход: Fixed Ontology + LLM Flexibility
+
+### Фиксированное ядро (предсказуемость)
+- 12 типов сущностей
+- 14 типов связей
+- Предсказуемые запросы
+- AI агент знает что спрашивать
+
+### LLM добавляет (гибкость)
+- Кастомные атрибуты к сущностям (`metadata: {key: value}`)
+- Контекстные метки (`tags: ["urgent", "trending"]`)
+- Временные метки (`news_date`, `relevance_decay`)
+- Новые связи через `correlates` с описанием
+
+### Почему гибрид
+1. Бизнес-цикл требует предсказуемой структуры для аналитики
+2. Новости/ниши могут требовать новых связей
+3. Временной аспект критичен (новость устаревает, навык остаётся)
+4. Единый формат для бизнеса, IT, саморазвития
+
+---
+
+## План реализации
+
+### Phase 1: Entity & Relation Extraction (1-2 недели)
+- [ ] LLM prompt для извлечения сущностей из chunks
+- [ ] Дедупликация сущностей (embedding similarity + LLM resolve)
+- [ ] Сохранение в JSON adjacency list
+
+### Phase 2: Graph Storage (1 неделя)
+- [ ] Выбор: JSON adjacency list → Kuzu (embedded)
+- [ ] Schema migration
+- [ ] Indexing для быстрого lookup
+
+### Phase 3: Community Detection (1 неделя)
+- [ ] Простая кластеризация по topic
+- [ ] LLM summary для каждого community
+- [ ] Иерархия: topics → domains
+
+### Phase 4: Query Engine (2 недели)
+- [ ] Local search (entity fan-out)
+- [ ] Global search (community summaries)
+- [ ] CLI команды: `media2rag rag`, `media2rag graphrag`
+
+### Phase 5: AI Agent Integration (1 неделя)
+- [ ] JSON output format
+- [ ] Provenance в ответах
+- [ ] Integration с Hermes и другими агентами
+
+---
+
+## Лучшие практики из Microsoft GraphRAG
+
+1. **Provenance** — каждая связь имеет source_chunk
+2. **Community summaries** — holistic search поверх entity lookup
+3. **Hierarchical clustering** — уровни абстракции (L0, L1, L2)
+4. **Global + Local search** — разные query patterns
+5. **LLM-generated graph** — не ручной, а извлечённый из текста
+6. **Faithfulness** — SelfCheckGPT для верификации ответов
+7. **Prompt tuning** — fine-tune prompts под свой домен
