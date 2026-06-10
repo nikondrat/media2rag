@@ -442,28 +442,29 @@ func (p *Pipeline) contextualEnrich(ctx context.Context, results []ChunkResult, 
 }
 
 func (p *Pipeline) enrichSingle(ctx context.Context, docSummary string, r *ChunkResult) (string, error) {
-	callCtx, cancel := p.timeoutCtx(ctx)
-	defer cancel()
-	callCtx = llm.WithStage(callCtx, "context_enrich")
-	callCtx = llm.WithChunkIndex(callCtx, r.Index)
-
 	content := r.Content
 	if len(content) > 1000 {
 		content = content[:1000]
 	}
 
 	userMsg := fmt.Sprintf("Document summary: %s\n\nChunk content:\n%s", docSummary, content)
-	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
-		Messages: []model.Message{
-			{Role: "system", Content: contextEnrichPrompt},
-			{Role: "user", Content: userMsg},
-		},
+	raw, err := p.retryLLMCall(ctx, "context_enrich", func(callCtx context.Context) (string, error) {
+		resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+			Messages: []model.Message{
+				{Role: "system", Content: contextEnrichPrompt},
+				{Role: "user", Content: userMsg},
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.Message.Content, nil
 	})
 	if err != nil {
 		return "", err
 	}
 
-	return strings.TrimSpace(resp.Message.Content), nil
+	return strings.TrimSpace(raw), nil
 }
 
 func (p *Pipeline) preClean(ctx context.Context, text string, emitter events.EventEmitter) (string, error) {
@@ -567,14 +568,17 @@ func (p *Pipeline) holisticAnalysis(ctx context.Context, results []ChunkResult) 
 	}
 
 	combined := strings.Join(summaries, "\n\n")
-	callCtx, cancel := p.timeoutCtx(ctx)
-	defer cancel()
-	callCtx = llm.WithStage(callCtx, "holistic")
-	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
-		Messages: []model.Message{
-			{Role: "system", Content: holisticPrompt},
-			{Role: "user", Content: combined},
-		},
+	raw, err := p.retryLLMCall(ctx, "holistic", func(callCtx context.Context) (string, error) {
+		resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+			Messages: []model.Message{
+				{Role: "system", Content: holisticPrompt},
+				{Role: "user", Content: combined},
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.Message.Content, nil
 	})
 	if err != nil {
 		return "", nil, err
@@ -582,7 +586,7 @@ func (p *Pipeline) holisticAnalysis(ctx context.Context, results []ChunkResult) 
 
 	coreThesis := ""
 	var domains []string
-	lines := strings.Split(resp.Message.Content, "\n")
+	lines := strings.Split(raw, "\n")
 	for _, line := range lines {
 		lower := strings.ToLower(strings.TrimSpace(line))
 		if strings.HasPrefix(lower, "core_thesis:") {
@@ -615,14 +619,17 @@ func (p *Pipeline) causalExtraction(ctx context.Context, results []ChunkResult) 
 	}
 
 	combined := strings.Join(summaries, "\n")
-	callCtx, cancel := p.timeoutCtx(ctx)
-	defer cancel()
-	callCtx = llm.WithStage(callCtx, "causal")
-	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
-		Messages: []model.Message{
-			{Role: "system", Content: causalExtractPrompt},
-			{Role: "user", Content: combined},
-		},
+	raw, err := p.retryLLMCall(ctx, "causal", func(callCtx context.Context) (string, error) {
+		resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+			Messages: []model.Message{
+				{Role: "system", Content: causalExtractPrompt},
+				{Role: "user", Content: combined},
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.Message.Content, nil
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -632,7 +639,7 @@ func (p *Pipeline) causalExtraction(ctx context.Context, results []ChunkResult) 
 	var preconditions []string
 	var counterfactuals []string
 
-	lines := strings.Split(resp.Message.Content, "\n")
+	lines := strings.Split(raw, "\n")
 	var currentChain *model.CausalLink
 
 	for _, line := range lines {
@@ -706,6 +713,36 @@ func formatCausalChains(chains []model.CausalLink) string {
 		}
 	}
 	return b.String()
+}
+
+func (p *Pipeline) retryLLMCall(ctx context.Context, stage string, fn func(context.Context) (string, error)) (string, error) {
+	const maxRetries = 2
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 2 * time.Second
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		callCtx, cancel := p.timeoutCtx(ctx)
+		callCtx = llm.WithStage(callCtx, stage)
+		callCtx = llm.WithRetryAttempt(callCtx, attempt)
+
+		result, err := fn(callCtx)
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return result, nil
+	}
+
+	return "", fmt.Errorf("%s failed after %d retries: %w", stage, maxRetries, lastErr)
 }
 
 func (p *Pipeline) timeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {

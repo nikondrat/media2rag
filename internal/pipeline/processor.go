@@ -280,34 +280,94 @@ func (p *Pipeline) processSingle(ctx context.Context, text string, chunkIndex in
 
 func parsePromptResult(response string) ChunkResult {
 	var r ChunkResult
+	var currentKey string
+
 	lines := strings.Split(response, "\n")
 	for _, line := range lines {
-		lower := strings.ToLower(strings.TrimSpace(line))
-		if strings.HasPrefix(lower, "type:") {
-			r.Type = safeFieldValue(line, 5)
-		} else if strings.HasPrefix(lower, "title:") {
-			r.Title = safeFieldValue(line, 6)
-		} else if strings.HasPrefix(lower, "topic:") {
-			r.Topic = safeFieldValue(line, 6)
-			r.Topics = parseCommaList(safeFieldValue(line, 6))
-		} else if strings.HasPrefix(lower, "summary:") {
-			r.Summary = safeFieldValue(line, 8)
-		} else if strings.HasPrefix(lower, "key_points:") {
-			r.KeyPoints = parseCommaList(safeFieldValue(line, 11))
-		} else if strings.HasPrefix(lower, "source_quote:") {
-			r.SourceQuote = safeFieldValue(line, 13)
-		} else if strings.HasPrefix(lower, "my_takeaway:") {
-			r.MyTakeaway = safeFieldValue(line, 12)
-		} else if strings.HasPrefix(lower, "confidence:") {
-			val := safeFieldValue(line, 11)
-			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				r.Confidence = f
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		key := knownKey(lower)
+		if key != "" {
+			currentKey = key
+			val := safeFieldValue(line, len(key)+1)
+			switch key {
+			case "type":
+				r.Type = val
+			case "title":
+				r.Title = val
+			case "topic":
+				r.Topic = val
+				r.Topics = parseCommaList(val)
+			case "summary":
+				r.Summary = val
+			case "key_points":
+				r.KeyPoints = parseCommaList(val)
+			case "source_quote":
+				r.SourceQuote = val
+			case "my_takeaway":
+				r.MyTakeaway = val
+			case "confidence":
+				if f, err := strconv.ParseFloat(val, 64); err == nil {
+					r.Confidence = f
+				}
+			case "applicability":
+				r.Applicability = val
 			}
-		} else if strings.HasPrefix(lower, "applicability:") {
-			r.Applicability = safeFieldValue(line, 14)
+			continue
+		}
+
+		if trimmed == "" {
+			currentKey = ""
+			continue
+		}
+
+		if isMultilineKey(currentKey) && trimmed != "" {
+			switch currentKey {
+			case "summary":
+				if r.Summary != "" {
+					r.Summary += " " + trimmed
+				}
+			case "source_quote":
+				if r.SourceQuote != "" {
+					r.SourceQuote += " " + trimmed
+				}
+			case "my_takeaway":
+				if r.MyTakeaway != "" {
+					r.MyTakeaway += " " + trimmed
+				}
+			case "applicability":
+				if r.Applicability != "" {
+					r.Applicability += " " + trimmed
+				}
+			}
 		}
 	}
 	return r
+}
+
+var knownKeys = []string{
+	"type", "title", "topic", "summary", "key_points",
+	"source_quote", "my_takeaway", "confidence", "applicability",
+}
+
+var multilineKeys = map[string]bool{
+	"summary": true, "source_quote": true,
+	"my_takeaway": true, "applicability": true,
+}
+
+func isMultilineKey(key string) bool {
+	return multilineKeys[key]
+}
+
+func knownKey(lower string) string {
+	for _, k := range knownKeys {
+		prefix := k + ":"
+		if strings.HasPrefix(lower, prefix) {
+			return k
+		}
+	}
+	return ""
 }
 
 func parseCommaList(raw string) []string {

@@ -21,15 +21,16 @@ import (
 )
 
 var (
-	processBackend         string
-	processModel           string
-	processExtractOnly     bool
-	processOutput          string
-	processOutputDir       string
-	processFinalDir        string
-	processLogFile         string
-	processForce           bool
-	processFileConcurrency int
+	processBackend          string
+	processModel            string
+	processExtractOnly      bool
+	processOutput           string
+	processOutputDir        string
+	processFinalDir         string
+	processLogFile          string
+	processForce            bool
+	processDryRun           bool
+	processFileConcurrency  int
 	processTotalConcurrency int
 )
 
@@ -86,6 +87,15 @@ When a directory is given, all .md files (non-recursive) are processed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		source := args[0]
 
+		if processDryRun {
+			info, err := os.Stat(source)
+			if err == nil && info.IsDir() {
+				return dryRunDirectory(source)
+			}
+			fmt.Fprintf(os.Stderr, "would process: %s\n", source)
+			return nil
+		}
+
 		info, err := os.Stat(source)
 		if err == nil && info.IsDir() {
 			return processDirectory(cmd, source)
@@ -93,6 +103,29 @@ When a directory is given, all .md files (non-recursive) are processed.`,
 
 		return processFile(cmd, source)
 	},
+}
+
+func dryRunDirectory(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read directory: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "files to process in %s:\n", dir)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext != ".md" && ext != ".markdown" {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), "._") {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %s\n", entry.Name())
+	}
+	return nil
 }
 
 func processDirectory(cmd *cobra.Command, dir string) error {
@@ -127,27 +160,41 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 	}
 
 	total := len(jobs)
-	fmt.Fprintf(os.Stderr, "found %d files to process\n", total)
 
 	fileConcurrency := effectiveFileConcurrency()
 	numWorkers := fileConcurrency
 	if numWorkers <= 0 || numWorkers > total {
 		numWorkers = total
 	}
-	if fileConcurrency == 0 && numWorkers > 1 {
-		fmt.Fprintf(os.Stderr, "processing all %d files concurrently (file_concurrency=unlimited)\n", numWorkers)
-	} else if numWorkers > 1 {
-		fmt.Fprintf(os.Stderr, "processing %d files at a time (file_concurrency=%d)\n", numWorkers, fileConcurrency)
+
+	var progress *events.ProgressEmitter
+	if !jsonOutput && total > 1 {
+		conc := fileConcurrency
+		if conc <= 0 {
+			conc = numWorkers
+		}
+		progress = events.NewProgressEmitter(total, conc)
+	} else if jsonOutput {
+		progress = nil
 	}
 
+	fmt.Fprintf(os.Stderr, "processing %d files", total)
+	if numWorkers > 1 {
+		fmt.Fprintf(os.Stderr, " (%d at a time)", numWorkers)
+	}
+	fmt.Fprintln(os.Stderr)
+
 	type fileResult struct {
-		name    string
-		err     error
-		skipped bool
+		name       string
+		fileOutDir string
+		err        error
+		skipped    bool
 	}
 
 	jobsCh := make(chan fileJob, total)
 	resultCh := make(chan fileResult, total)
+
+	batchStart := time.Now()
 
 	var wg sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
@@ -170,25 +217,40 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 				}
 
 				if shouldSkip && !processForce {
+					if progress != nil {
+						progress.FileSkipped(job.name)
+					}
 					resultCh <- fileResult{name: job.name, skipped: true}
 					continue
 				}
 
-				var emitter events.EventEmitter = events.NewHumanEmitter()
+				var tee *events.TeeEmitter
 				logPath := filepath.Join(fileOutDir, "process.log")
-				if processLogFile != "" {
-					tee, teeErr := events.NewTeeEmitter(emitter, processLogFile)
-					if teeErr == nil {
-						emitter = tee
-					}
+
+				if progress != nil {
+					progress.FileStart(job.name)
+					tee, _ = events.NewTeeEmitter(progress, logPath)
 				} else {
-					tee, teeErr := events.NewTeeEmitter(emitter, logPath)
-					if teeErr == nil {
-						emitter = tee
+					var inner events.EventEmitter
+					if jsonOutput {
+						inner = events.NewStdoutEmitter()
+					} else {
+						inner = events.NewHumanEmitter()
+					}
+					tee, _ = events.NewTeeEmitter(inner, logPath)
+				}
+
+				err := runProcessFile(cmd, job.path, tee, fileOutDir)
+
+				if progress != nil {
+					if err != nil {
+						progress.FileError(job.name, err)
+					} else {
+						progress.FileDone(job.name)
 					}
 				}
 
-				resultCh <- fileResult{name: job.name, err: runProcessFile(cmd, job.path, emitter, fileOutDir)}
+				resultCh <- fileResult{name: job.name, fileOutDir: fileOutDir, err: err}
 			}
 		}()
 	}
@@ -203,8 +265,15 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 		close(resultCh)
 	}()
 
+	if progress != nil {
+		progress.Wait()
+	}
+
 	var processed, skipped, failed int
 	var errs []error
+	var totalCost float64
+	var totalTokensIn, totalTokensOut int
+
 	for r := range resultCh {
 		switch {
 		case r.skipped:
@@ -212,13 +281,26 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 		case r.err != nil:
 			failed++
 			errs = append(errs, fmt.Errorf("%s: %w", r.name, r.err))
-			fmt.Fprintf(os.Stderr, "\nERROR: %v\n", r.err)
 		default:
 			processed++
+			if r.fileOutDir != "" {
+				if st := pipeline.LoadStatus(r.fileOutDir); st != nil && st.Stage == pipeline.StageDone {
+					totalCost += st.TotalCost
+					totalTokensIn += st.TotalTokensIn
+					totalTokensOut += st.TotalTokensOut
+				}
+			}
 		}
 	}
 
+	batchDur := time.Since(batchStart).Round(time.Second)
+
 	fmt.Fprintf(os.Stderr, "\ndone: %d processed, %d skipped, %d failed\n", processed, skipped, failed)
+	fmt.Fprintf(os.Stderr, "time: %s\n", batchDur)
+	if totalCost > 0 {
+		fmt.Fprintf(os.Stderr, "tokens: %d in / %d out\n", totalTokensIn, totalTokensOut)
+		fmt.Fprintf(os.Stderr, "cost: $%.4f\n", totalCost)
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("%d error(s)", len(errs))
@@ -511,6 +593,7 @@ func init() {
 	processCmd.Flags().StringVar(&processFinalDir, "final-dir", "", "directory to copy final .md files (flat, named by title)")
 	processCmd.Flags().StringVar(&processLogFile, "log-file", "", "log file path (default: auto in output dir)")
 	processCmd.Flags().BoolVar(&processForce, "force", false, "reprocess files even if output exists")
+	processCmd.Flags().BoolVar(&processDryRun, "dry-run", false, "list files that would be processed without running LLM")
 	processCmd.Flags().IntVar(&processFileConcurrency, "file-concurrency", 0, "max files to process in parallel (0 = auto based on backend)")
 	processCmd.Flags().IntVar(&processTotalConcurrency, "total-concurrency", 0, "max concurrent LLM requests across all files (0 = auto based on backend)")
 	rootCmd.AddCommand(processCmd)

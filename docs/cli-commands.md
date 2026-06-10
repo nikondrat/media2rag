@@ -17,6 +17,7 @@
 | `--final-dir` | `string` | `""` | Плоская директория с .md по названиям |
 | `--log-file` | `string` | `""` | Файл лога (авто в output dir) |
 | `--force` | `bool` | `false` | Переобработать, даже если есть output |
+| `--dry-run` | `bool` | `false` | Показать что будет обработано, без LLM |
 | `--file-concurrency` | `int` | `0` | Параллельных файлов (0=auto per backend) |
 | `--total-concurrency` | `int` | `0` | Всего параллельных LLM запросов (0=auto) |
 
@@ -56,6 +57,9 @@ media2rag process ./notes.md --force
 # JSON output для AI агента
 media2rag process https://example.com --json
 
+# Посмотреть что будет обработано
+media2rag process ./directory/ --dry-run
+
 # С параллельной обработкой
 media2rag process ./directory/ --file-concurrency 3 --total-concurrency 20
 ```
@@ -67,6 +71,19 @@ media2rag process ./directory/ --file-concurrency 3 --total-concurrency 20
 | URL (http/https) | Любой | `npx rdrr` — веб, YouTube, Telegram, GitHub |
 | `.md` / `.markdown` | Markdown | Чтение файла, стрип frontmatter |
 | Директория | `.md`/`.markdown` | Batch по всем файлам (не рекурсивно) |
+
+### Batch output (директория)
+
+```bash
+# После обработки директории:
+processing 20 files (3 at a time)
+╢▌▌▌▌▌▌▌▌▌▌▌▌▌▌░╟ [5/20] 3 active notes.md  chunk 3/10  ETA 2m34s
+
+done: 18 processed, 1 skipped, 1 failed
+time: 4m32s
+tokens: 45230 in / 13130 out
+cost: $0.3421
+```
 
 ### Output структура (с `-d`)
 
