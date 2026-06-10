@@ -11,6 +11,8 @@ import (
 	"media2rag/internal/model"
 )
 
+const teeFileFlags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
+
 type EventEmitter interface {
 	Emit(model.Event)
 	Done()
@@ -55,7 +57,7 @@ func NewTeeEmitter(inner EventEmitter, logPath string) (*TeeEmitter, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return nil, fmt.Errorf("create log dir: %w", err)
 	}
-	f, err := os.Create(logPath)
+	f, err := os.OpenFile(logPath, teeFileFlags, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("create log file: %w", err)
 	}
@@ -157,6 +159,12 @@ func (e *HumanEmitter) Emit(evt model.Event) {
 	case "processing_chunk_done":
 		data, _ := evt.Data.(map[string]int)
 		fmt.Fprintf(os.Stderr, "pipeline: chunk %d done\n", data["chunk"])
+	case "processing_retry":
+		data, _ := evt.Data.(map[string]interface{})
+		chunk, _ := data["chunk"].(int)
+		attempt, _ := data["attempt"].(int)
+		errMsg, _ := data["error"].(string)
+		fmt.Fprintf(os.Stderr, "pipeline: chunk %d retry %d: %s\n", chunk, attempt, errMsg)
 	case "checkpoint_restore":
 		data, _ := evt.Data.(map[string]string)
 		fmt.Fprintf(os.Stderr, "pipeline: loaded %s from checkpoint\n", data["stage"])

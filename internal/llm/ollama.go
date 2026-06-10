@@ -27,7 +27,7 @@ func NewOllamaClient(baseURL, model string, timeout time.Duration) *OllamaClient
 	return &OllamaClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
-		client:  &http.Client{Timeout: timeout},
+		client:  newConcurrentHTTPClient(timeout),
 	}
 }
 
@@ -80,17 +80,21 @@ type ollamaMessage struct {
 }
 
 type ollamaChatResponse struct {
-	Model     string        `json:"model"`
-	CreatedAt string        `json:"created_at"`
-	Message   ollamaMessage `json:"message"`
-	Done      bool          `json:"done"`
+	Model            string        `json:"model"`
+	CreatedAt        string        `json:"created_at"`
+	Message          ollamaMessage `json:"message"`
+	Done             bool          `json:"done"`
+	PromptEvalCount  int           `json:"prompt_eval_count"`
+	EvalCount        int           `json:"eval_count"`
 }
 
 type ollamaStreamResponse struct {
-	Model     string `json:"model"`
-	CreatedAt string `json:"created_at"`
-	Content   string `json:"content"`
-	Done      bool   `json:"done"`
+	Model            string `json:"model"`
+	CreatedAt        string `json:"created_at"`
+	Content          string `json:"content"`
+	Done             bool   `json:"done"`
+	PromptEvalCount  int    `json:"prompt_eval_count"`
+	EvalCount        int    `json:"eval_count"`
 }
 
 type ollamaEmbedRequest struct {
@@ -139,9 +143,27 @@ func (c *OllamaClient) Chat(ctx context.Context, req model.ChatRequest) (*model.
 		return nil, fmt.Errorf("%w: ollama returned status %d", model.ErrLLMUnavailable, resp.StatusCode)
 	}
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(bodyBytes) == 0 {
+		return nil, fmt.Errorf("ollama returned empty response body")
+	}
+
 	var ollamaResp ollamaChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &ollamaResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	usage := &model.Usage{
+		PromptTokens:     ollamaResp.PromptEvalCount,
+		CompletionTokens: ollamaResp.EvalCount,
+		TotalTokens:      ollamaResp.PromptEvalCount + ollamaResp.EvalCount,
+	}
+	if usage.TotalTokens == 0 {
+		usage = nil
 	}
 
 	return &model.ChatResponse{
@@ -150,7 +172,8 @@ func (c *OllamaClient) Chat(ctx context.Context, req model.ChatRequest) (*model.
 			Role:    ollamaResp.Message.Role,
 			Content: ollamaResp.Message.Content,
 		},
-		Done: ollamaResp.Done,
+		Done:  ollamaResp.Done,
+		Usage: usage,
 	}, nil
 }
 
@@ -211,8 +234,10 @@ func (c *OllamaClient) StreamChat(ctx context.Context, req model.ChatRequest) (<
 			}
 
 			ch <- model.StreamDelta{
-				Content: streamResp.Content,
-				Done:    streamResp.Done,
+				Content:          streamResp.Content,
+				Done:             streamResp.Done,
+				PromptEvalCount:  streamResp.PromptEvalCount,
+				EvalCount:        streamResp.EvalCount,
 			}
 
 			if streamResp.Done {

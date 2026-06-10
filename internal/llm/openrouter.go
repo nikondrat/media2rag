@@ -30,7 +30,7 @@ func NewOpenRouterClient(baseURL, apiKey, model string, timeout time.Duration) *
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		apiKey:   apiKey,
 		model:    model,
-		client:   &http.Client{Timeout: timeout},
+		client:   newConcurrentHTTPClient(timeout),
 		maxRetry: 3,
 	}
 }
@@ -53,10 +53,17 @@ type openRouterChoice struct {
 	FinishReason string            `json:"finish_reason"`
 }
 
+type openRouterUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 type openRouterResponse struct {
 	ID      string            `json:"id"`
 	Model   string            `json:"model"`
 	Choices []openRouterChoice `json:"choices"`
+	Usage   *openRouterUsage  `json:"usage,omitempty"`
 }
 
 type openRouterStreamChoice struct {
@@ -166,13 +173,23 @@ func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*mo
 		content = openAIResp.Choices[0].Message.ReasoningContent
 	}
 
+	var usage *model.Usage
+	if openAIResp.Usage != nil {
+		usage = &model.Usage{
+			PromptTokens:     openAIResp.Usage.PromptTokens,
+			CompletionTokens: openAIResp.Usage.CompletionTokens,
+			TotalTokens:      openAIResp.Usage.TotalTokens,
+		}
+	}
+
 	return &model.ChatResponse{
 		Model: openAIResp.Model,
 		Message: model.Message{
 			Role:    openAIResp.Choices[0].Message.Role,
 			Content: content,
 		},
-		Done: true,
+		Done:  true,
+		Usage: usage,
 	}, nil
 }
 

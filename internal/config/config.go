@@ -22,10 +22,12 @@ type LLMConfig struct {
 }
 
 type PipelineConfig struct {
-	MaxTokens        int  `mapstructure:"max_tokens"`
-	ChunkSize        int  `mapstructure:"chunk_size"`
-	MaxConcurrency   int  `mapstructure:"max_concurrency"`
-	HolisticAnalysis *bool `mapstructure:"holistic_analysis"`
+	MaxTokens            int  `mapstructure:"max_tokens"`
+	ChunkSize            int  `mapstructure:"chunk_size"`
+	MaxConcurrency       int  `mapstructure:"max_concurrency"`
+	MaxFileConcurrency   int  `mapstructure:"max_file_concurrency"`
+	MaxTotalConcurrency  int  `mapstructure:"max_total_concurrency"`
+	HolisticAnalysis     *bool `mapstructure:"holistic_analysis"`
 }
 
 type WorkspaceConfig struct {

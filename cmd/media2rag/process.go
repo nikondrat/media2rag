@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,15 +21,59 @@ import (
 )
 
 var (
-	processBackend     string
-	processModel       string
-	processExtractOnly bool
-	processOutput      string
-	processOutputDir   string
-	processFinalDir    string
-	processLogFile     string
-	processForce       bool
+	processBackend         string
+	processModel           string
+	processExtractOnly     bool
+	processOutput          string
+	processOutputDir       string
+	processFinalDir        string
+	processLogFile         string
+	processForce           bool
+	processFileConcurrency int
+	processTotalConcurrency int
 )
+
+func effectiveFileConcurrency() int {
+	if processFileConcurrency > 0 {
+		return processFileConcurrency
+	}
+	if fc := cfg.Pipeline.MaxFileConcurrency; fc > 0 {
+		return fc
+	}
+	backend := cfg.LLM.DefaultBackend
+	if processBackend != "" {
+		backend = processBackend
+	}
+	switch backend {
+	case "openrouter":
+		return 0
+	case "lmstudio":
+		return 4
+	default:
+		return 1
+	}
+}
+
+func effectiveTotalConcurrency() int {
+	if processTotalConcurrency > 0 {
+		return processTotalConcurrency
+	}
+	if tc := cfg.Pipeline.MaxTotalConcurrency; tc > 0 {
+		return tc
+	}
+	backend := cfg.LLM.DefaultBackend
+	if processBackend != "" {
+		backend = processBackend
+	}
+	switch backend {
+	case "openrouter":
+		return 100
+	case "lmstudio":
+		return 16
+	default:
+		return 8
+	}
+}
 
 var processCmd = &cobra.Command{
 	Use:   "process [file|url|directory]",
@@ -56,15 +101,16 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 		outDir = filepath.Join(dir, "media2rag-output")
 	}
 
-	var errs []error
-	var processed, skipped, failed int
-	total := 0
-
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read directory: %w", err)
 	}
 
+	type fileJob struct {
+		path string
+		name string
+	}
+	var jobs []fileJob
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -77,82 +123,102 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 		if strings.HasPrefix(name, "._") {
 			continue
 		}
-		total++
+		jobs = append(jobs, fileJob{path: filepath.Join(dir, name), name: name})
 	}
 
+	total := len(jobs)
 	fmt.Fprintf(os.Stderr, "found %d files to process\n", total)
 
-	progress := events.NewProgressEmitter(events.NewNoopEmitter(), total)
-	logFileFlag := processLogFile
-
-	fileIdx := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		ext := filepath.Ext(name)
-		if ext != ".md" && ext != ".markdown" {
-			continue
-		}
-		if strings.HasPrefix(name, "._") {
-			continue
-		}
-
-		baseName := name[:len(name)-len(ext)]
-		fileOutDir := filepath.Join(outDir, baseName)
-
-		statusFile := filepath.Join(fileOutDir, "status.yaml")
-		shouldSkip := false
-		if data, err := os.ReadFile(statusFile); err == nil {
-			var st struct {
-				Stage string `yaml:"stage"`
-			}
-			if yaml.Unmarshal(data, &st) == nil && st.Stage == "done" {
-				shouldSkip = true
-			}
-		}
-
-		if shouldSkip && !processForce {
-			skipped++
-			progress.SetFile(fileIdx, name)
-			fileIdx++
-			continue
-		}
-
-		path := filepath.Join(dir, name)
-		logPath := filepath.Join(fileOutDir, "process.log")
-
-		progress.SetFile(fileIdx, name)
-
-		var emitter events.EventEmitter = progress
-		if logFileFlag != "" {
-			tee, teeErr := events.NewTeeEmitter(progress, logFileFlag)
-			if teeErr == nil {
-				emitter = tee
-			}
-		} else {
-			tee, teeErr := events.NewTeeEmitter(progress, logPath)
-			if teeErr == nil {
-				emitter = tee
-			}
-		}
-
-		processOutputDir = fileOutDir
-
-		if err := processFileWithEmitter(cmd, path, emitter); err != nil {
-			failed++
-			errs = append(errs, fmt.Errorf("%s: %w", name, err))
-			fmt.Fprintf(os.Stderr, "\nERROR: %v\n", err)
-		} else {
-			processed++
-		}
-		fileIdx++
+	fileConcurrency := effectiveFileConcurrency()
+	numWorkers := fileConcurrency
+	if numWorkers <= 0 || numWorkers > total {
+		numWorkers = total
+	}
+	if fileConcurrency == 0 && numWorkers > 1 {
+		fmt.Fprintf(os.Stderr, "processing all %d files concurrently (file_concurrency=unlimited)\n", numWorkers)
+	} else if numWorkers > 1 {
+		fmt.Fprintf(os.Stderr, "processing %d files at a time (file_concurrency=%d)\n", numWorkers, fileConcurrency)
 	}
 
-	fmt.Fprintf(os.Stderr, "\n\ndone: %d processed, %d skipped, %d failed\n", processed, skipped, failed)
+	type fileResult struct {
+		name    string
+		err     error
+		skipped bool
+	}
 
-	progress.Close()
+	jobsCh := make(chan fileJob, total)
+	resultCh := make(chan fileResult, total)
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobsCh {
+				baseName := job.name[:len(job.name)-len(filepath.Ext(job.name))]
+				fileOutDir := filepath.Join(outDir, baseName)
+
+				statusFile := filepath.Join(fileOutDir, "status.yaml")
+				shouldSkip := false
+				if data, err := os.ReadFile(statusFile); err == nil {
+					var st struct {
+						Stage string `yaml:"stage"`
+					}
+					if yaml.Unmarshal(data, &st) == nil && st.Stage == "done" {
+						shouldSkip = true
+					}
+				}
+
+				if shouldSkip && !processForce {
+					resultCh <- fileResult{name: job.name, skipped: true}
+					continue
+				}
+
+				var emitter events.EventEmitter = events.NewHumanEmitter()
+				logPath := filepath.Join(fileOutDir, "process.log")
+				if processLogFile != "" {
+					tee, teeErr := events.NewTeeEmitter(emitter, processLogFile)
+					if teeErr == nil {
+						emitter = tee
+					}
+				} else {
+					tee, teeErr := events.NewTeeEmitter(emitter, logPath)
+					if teeErr == nil {
+						emitter = tee
+					}
+				}
+
+				resultCh <- fileResult{name: job.name, err: runProcessFile(cmd, job.path, emitter, fileOutDir)}
+			}
+		}()
+	}
+
+	for _, j := range jobs {
+		jobsCh <- j
+	}
+	close(jobsCh)
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	var processed, skipped, failed int
+	var errs []error
+	for r := range resultCh {
+		switch {
+		case r.skipped:
+			skipped++
+		case r.err != nil:
+			failed++
+			errs = append(errs, fmt.Errorf("%s: %w", r.name, r.err))
+			fmt.Fprintf(os.Stderr, "\nERROR: %v\n", r.err)
+		default:
+			processed++
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "\ndone: %d processed, %d skipped, %d failed\n", processed, skipped, failed)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("%d error(s)", len(errs))
@@ -182,14 +248,14 @@ func processFile(cmd *cobra.Command, source string) (err error) {
 		}
 	}
 
-	return runProcessFile(cmd, source, emitter)
+	return runProcessFile(cmd, source, emitter, processOutputDir)
 }
 
 func processFileWithEmitter(cmd *cobra.Command, source string, emitter events.EventEmitter) (err error) {
-	return runProcessFile(cmd, source, emitter)
+	return runProcessFile(cmd, source, emitter, processOutputDir)
 }
 
-func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitter) (err error) {
+func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitter, outputDir string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("PANIC: %v", r)
@@ -260,7 +326,29 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 			return fmt.Errorf("llm client: %w", err)
 		}
 	}
+	totalConc := effectiveTotalConcurrency()
+	client = llm.NewRateLimitedClient(client, totalConc)
 
+	// --- Pricing ---
+	if err := llm.LoadPricing(); err != nil {
+		emitter.Emit(model.Event{Type: "error", Error: fmt.Sprintf("load pricing: %v", err)})
+	}
+
+	// --- Telemetry recorders ---
+	var telemetryRecorder model.TelemetryRecorder
+	var jsonlRec *pipeline.JSONLRecorder
+	if outputDir != "" {
+		var err error
+		jsonlRec, err = pipeline.NewJSONLRecorder(outputDir)
+		if err != nil {
+			emitter.Emit(model.Event{Type: "error", Error: fmt.Sprintf("jsonl recorder: %v", err)})
+		} else {
+			telemetryRecorder = jsonlRec
+		}
+	}
+	if jsonlRec != nil {
+		defer jsonlRec.Close()
+	}
 	// --- Pipeline config ---
 	pcfg := pipeline.DefaultConfig()
 	if cfg.Pipeline.ChunkSize > 0 {
@@ -269,7 +357,11 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 	if cfg.Pipeline.MaxConcurrency > 0 {
 		pcfg.MaxConcurrency = cfg.Pipeline.MaxConcurrency
 	} else {
-		switch cfg.LLM.DefaultBackend {
+		backend := cfg.LLM.DefaultBackend
+		if processBackend != "" {
+			backend = processBackend
+		}
+		switch backend {
 		case "lmstudio":
 			pcfg.MaxConcurrency = 4
 		case "openrouter":
@@ -282,6 +374,9 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 		pcfg.HolisticAnalysis = *cfg.Pipeline.HolisticAnalysis
 	}
 	pipe := pipeline.New(pcfg, client)
+	if telemetryRecorder != nil {
+		pipe.SetRecorder(telemetryRecorder)
+	}
 
 	// --- Workspace ---
 	workspaceDir := cfg.Workspace.DataDir
@@ -307,8 +402,8 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 	}
 
 	pipe.SetCheckpointDir(filepath.Join(wDoc.RootPath, ".pipeline-cache"))
-	if processOutputDir != "" {
-		pipe.SetOutputDir(processOutputDir)
+	if outputDir != "" {
+		pipe.SetOutputDir(outputDir)
 	}
 
 	ec := model.ExtractedContent{
@@ -333,8 +428,8 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 	}
 
 	// Write final.md (pipeline already wrote intermediate files if outputDir set)
-	if processOutputDir != "" {
-		if err := exportToDir(processOutputDir, source, markdown, ragDoc, wordCount, version, emitter); err != nil {
+	if outputDir != "" {
+		if err := exportToDir(outputDir, source, markdown, ragDoc, wordCount, version, emitter); err != nil {
 			emitter.Emit(model.Event{Type: "error", Error: fmt.Sprintf("export: %v", err)})
 			return err
 		}
@@ -363,8 +458,8 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 	// Determine output path
 	outputPath := processOutput
 	if outputPath == "" {
-		if processOutputDir != "" {
-			versionDir := filepath.Join(processOutputDir, fmt.Sprintf("v%d", version))
+		if outputDir != "" {
+			versionDir := filepath.Join(outputDir, fmt.Sprintf("v%d", version))
 			outputPath = filepath.Join(versionDir, "final.md")
 		} else {
 			versionDir := filepath.Join(wDoc.RootPath, "versions", fmt.Sprintf("v%d", version))
@@ -382,8 +477,8 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 		return fmt.Errorf("write output: %w", err)
 	}
 
-	if processOutputDir != "" {
-		if err := exportToDir(processOutputDir, source, markdown, ragDoc, wordCount, version, emitter); err != nil {
+	if outputDir != "" {
+		if err := exportToDir(outputDir, source, markdown, ragDoc, wordCount, version, emitter); err != nil {
 			emitter.Emit(model.Event{Type: "error", Error: fmt.Sprintf("export: %v", err)})
 			return err
 		}
@@ -398,8 +493,8 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 		"title":       ragDoc.Metadata.Title,
 		"topics":      ragDoc.Metadata.Topics,
 	}
-	if processOutputDir != "" {
-		completedData["output_dir"] = processOutputDir
+	if outputDir != "" {
+		completedData["output_dir"] = outputDir
 	}
 	emitter.Emit(model.Event{Type: "completed", Data: completedData})
 
@@ -416,6 +511,8 @@ func init() {
 	processCmd.Flags().StringVar(&processFinalDir, "final-dir", "", "directory to copy final .md files (flat, named by title)")
 	processCmd.Flags().StringVar(&processLogFile, "log-file", "", "log file path (default: auto in output dir)")
 	processCmd.Flags().BoolVar(&processForce, "force", false, "reprocess files even if output exists")
+	processCmd.Flags().IntVar(&processFileConcurrency, "file-concurrency", 0, "max files to process in parallel (0 = auto based on backend)")
+	processCmd.Flags().IntVar(&processTotalConcurrency, "total-concurrency", 0, "max concurrent LLM requests across all files (0 = auto based on backend)")
 	rootCmd.AddCommand(processCmd)
 }
 

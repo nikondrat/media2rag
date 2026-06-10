@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"media2rag/internal/events"
 	"media2rag/internal/llm"
@@ -35,6 +36,7 @@ const (
 	EventAssembling          = "assembling"
 	EventPipelineCompleted   = "pipeline_completed"
 	EventCheckpointRestore   = "checkpoint_restore"
+	EventProcessingRetry     = "processing_retry"
 )
 
 const cleaningPrompt = `You are a text cleaning assistant. Clean the following text by:
@@ -130,6 +132,7 @@ type PipelineConfig struct {
 	ChunkSize        int           `json:"chunk_size"`
 	ChunkOverlap     int           `json:"chunk_overlap"`
 	MaxConcurrency   int           `json:"max_concurrency"`
+	MaxFileConcurrency int         `json:"max_file_concurrency"`
 	LLMTimeout       time.Duration `json:"llm_timeout"`
 	HolisticAnalysis bool          `json:"holistic_analysis"`
 }
@@ -155,6 +158,7 @@ type Pipeline struct {
 	author        string
 	language      string
 	model         string
+	recorder      model.TelemetryRecorder
 }
 
 func New(cfg PipelineConfig, client llm.LLMClient) *Pipeline {
@@ -193,6 +197,10 @@ func (p *Pipeline) SetOutputDir(dir string) {
 	p.outputDir = dir
 }
 
+func (p *Pipeline) SetRecorder(r model.TelemetryRecorder) {
+	p.recorder = r
+}
+
 func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter events.EventEmitter) (*model.RAGDocument, error) {
 	p.source = ec.Source
 	p.docType = ec.DocType
@@ -205,7 +213,16 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 		_ = os.MkdirAll(filepath.Join(p.outputDir, "chunks"), 0755)
 		_ = os.MkdirAll(filepath.Join(p.outputDir, "results"), 0755)
 		_ = os.MkdirAll(filepath.Join(p.outputDir, "output"), 0755)
-		p.status = NewStatus(p.outputDir, ec.Source)
+		p.status = LoadStatus(p.outputDir)
+		if p.status == nil {
+			p.status = NewStatus(p.outputDir, ec.Source)
+		}
+
+		if p.recorder != nil {
+			statusRec := NewStatusRecorder(p.status)
+			teeRec := model.NewTeeRecorder(p.recorder, statusRec)
+			p.llmClient = llm.NewInstrumentedClient(p.llmClient, nil, teeRec)
+		}
 	}
 
 	emitter.Emit(model.Event{Type: EventPipelineStart, Data: map[string]int{"text_length": len(ec.Content)}})
@@ -427,6 +444,8 @@ func (p *Pipeline) contextualEnrich(ctx context.Context, results []ChunkResult, 
 func (p *Pipeline) enrichSingle(ctx context.Context, docSummary string, r *ChunkResult) (string, error) {
 	callCtx, cancel := p.timeoutCtx(ctx)
 	defer cancel()
+	callCtx = llm.WithStage(callCtx, "context_enrich")
+	callCtx = llm.WithChunkIndex(callCtx, r.Index)
 
 	content := r.Content
 	if len(content) > 1000 {
@@ -498,18 +517,42 @@ func (p *Pipeline) preClean(ctx context.Context, text string, emitter events.Eve
 }
 
 func (p *Pipeline) cleanSinglePart(ctx context.Context, text string) (string, error) {
-	callCtx, cancel := p.timeoutCtx(ctx)
-	defer cancel()
-	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
-		Messages: []model.Message{
-			{Role: "system", Content: cleaningPrompt},
-			{Role: "user", Content: text},
-		},
-	})
-	if err != nil {
-		return "", err
+	const maxRetries = 2
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 2 * time.Second
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		callCtx, cancel := p.timeoutCtx(ctx)
+		callCtx = llm.WithStage(callCtx, "pre_clean")
+		callCtx = llm.WithSource(callCtx, p.source)
+		resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+			Messages: []model.Message{
+				{Role: "system", Content: cleaningPrompt},
+				{Role: "user", Content: text},
+			},
+		})
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		content := strings.TrimSpace(resp.Message.Content)
+		if content == "" {
+			lastErr = fmt.Errorf("llm returned empty response")
+			continue
+		}
+		return content, nil
 	}
-	return resp.Message.Content, nil
+	return "", fmt.Errorf("all %d attempts failed: %w", maxRetries+1, lastErr)
 }
 
 func (p *Pipeline) holisticAnalysis(ctx context.Context, results []ChunkResult) (string, []string, error) {
@@ -526,6 +569,7 @@ func (p *Pipeline) holisticAnalysis(ctx context.Context, results []ChunkResult) 
 	combined := strings.Join(summaries, "\n\n")
 	callCtx, cancel := p.timeoutCtx(ctx)
 	defer cancel()
+	callCtx = llm.WithStage(callCtx, "holistic")
 	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
 		Messages: []model.Message{
 			{Role: "system", Content: holisticPrompt},
@@ -573,6 +617,7 @@ func (p *Pipeline) causalExtraction(ctx context.Context, results []ChunkResult) 
 	combined := strings.Join(summaries, "\n")
 	callCtx, cancel := p.timeoutCtx(ctx)
 	defer cancel()
+	callCtx = llm.WithStage(callCtx, "causal")
 	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
 		Messages: []model.Message{
 			{Role: "system", Content: causalExtractPrompt},
@@ -628,18 +673,24 @@ func (p *Pipeline) causalExtraction(ctx context.Context, results []ChunkResult) 
 	return chains, preconditions, counterfactuals, nil
 }
 
+var sectionHeaders = []string{"causal_chains:", "preconditions:", "counterfactuals:"}
+
 func inSection(lines []string, currentLine string, sectionName string) bool {
 	found := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.ToLower(trimmed) == sectionName+":" {
+		lower := strings.ToLower(trimmed)
+		if lower == sectionName+":" {
 			found = true
 		}
 		if trimmed == currentLine {
 			return found
 		}
-		if strings.HasPrefix(strings.ToLower(trimmed), "causal_chains:") && sectionName != "causal_chains" {
-			found = false
+		for _, h := range sectionHeaders {
+			if strings.HasPrefix(lower, h) && lower != sectionName+":" {
+				found = false
+				break
+			}
 		}
 	}
 	return false
@@ -705,8 +756,15 @@ func splitParagraphParts(text string, maxLen int) []string {
 			continue
 		}
 
+		// avoid splitting in the middle of a multi-byte UTF-8 character
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+		if len(cut) == 0 {
+			cut = text[:maxLen]
+		}
 		parts = append(parts, cut)
-		text = text[maxLen:]
+		text = text[len(cut):]
 	}
 	return parts
 }
