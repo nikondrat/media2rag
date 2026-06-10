@@ -178,3 +178,234 @@ Markdown+ — это **подготовка данных** для GraphRAG. Ко
 → Найти общие descendants
 → Вернуть пересекающиеся пути
 ```
+
+---
+
+## CLI команды для GraphRAG
+
+### `media2rag rag <query>`
+
+Векторный поиск по chunks (Qdrant).
+
+```bash
+# Простой поиск
+media2rag rag "как масштабировать бизнес"
+
+# С фильтрами
+media2rag rag "метрики продаж" --top 10 --min-score 0.7
+
+# JSON output (для AI агентов)
+media2rag rag "проблемы логистики" --format json
+```
+
+**Output:**
+```json
+{
+  "results": [
+    {
+      "chunk_id": "chunk_05",
+      "file": "Key Marketing Metrics.md",
+      "score": 0.85,
+      "topic": "CPL и CPO",
+      "summary": "...",
+      "key_points": ["..."]
+    }
+  ]
+}
+```
+
+### `media2rag graphrag <query>`
+
+Каузальный поиск по Knowledge Graph с обходом на 2-3 hop.
+
+```bash
+# Поиск с causal chains
+media2rag graphrag "почему компании банкротятся"
+
+# С указанием глубины обхода
+media2rag graphrag "как снизить издержки" --depth 3
+
+# JSON output
+media2rag graphrag "возможности в логистике" --format json
+```
+
+**Output:**
+```json
+{
+  "query": "возможности в логистике",
+  "entities": ["логистика", "издержки", "склады"],
+  "chains": [
+    {
+      "path": ["маркетплейсы 32%", "высокие издержки", "локализация", "склады"],
+      "relations": ["causes", "enables", "leads_to"],
+      "confidence": 0.8
+    }
+  ],
+  "opportunities": [
+    {
+      "problem": "маржинальность съедается логистикой",
+      "solution": "локальные склады",
+      "monetization": "аренда/управление"
+    }
+  ]
+}
+```
+
+---
+
+## Универсальность GraphRAG
+
+GraphRAG — **не только для бизнеса**. Это универсальный инструмент для каузального поиска.
+
+### Примеры использования
+
+**Бизнес-анализ (один из навыков):**
+```
+Query: "какой бизнес запустить в строительстве"
+→ Обход графа: строительство → АЗС → склады → логистика
+→ Цепочка: "Wildberries 32%" → "издержки" → "локализация" → "склады"
+→ Ответ: бизнес на аренде холодильных складов
+```
+
+**Технический анализ:**
+```
+Query: "почему система падает под нагрузкой"
+→ Обход графа: нагрузка → БД → индексы → блокировки
+→ Цепочка: "нет индексов" → "full scan" → "блокировки" → "timeout"
+→ Ответ: добавить индексы, оптимизировать запросы
+```
+
+**Обучение:**
+```
+Query: "как работает Kubernetes"
+→ Обход графа: pod → node → cluster → scheduling
+→ Цепочка: "deployment" → "replicaset" → "pod" → "container"
+→ Ответ: объяснение с causal links между компонентами
+```
+
+---
+
+## Примеры цепочек 2-3 порядка
+
+### Цепочка 1: От проблемы к бизнес-возможности
+
+```
+[Wildberries забирает 32%]
+    ↓ causes
+[высокие издержки на логистику]
+    ↓ enables
+[выгодно локализовать поставки]
+    ↓ leads_to
+[спрос на склады-холодильники рядом с городом]
+    ↓ opportunity
+[бизнес на аренде/управлении складами]
+```
+
+### Цепочка 2: Вторичные эффекты
+
+```
+[рост маркетплейсов]
+    ↓ causes
+[рост продаж через интернет]
+    ↓ causes
+[рост нагрузки на логистику]
+    ↓ causes
+[дефицит складских помещений]
+    ↓ opportunity
+[инвестиции в складскую недвижимость]
+```
+
+### Цепочка 3: Технический долг
+
+```
+[нет тестов]
+    ↓ causes
+[баги в production]
+    ↓ causes
+[hotfixes в выходные]
+    ↓ causes
+[выгорание команды]
+    ↓ prevents
+[развитие продукта]
+```
+
+---
+
+## Storage: Graph DB
+
+### Варианты
+
+| DB | Плюсы | Минусы | Выбор |
+|----|-------|--------|-------|
+| Neo4j | Мощный Cypher, визуализация | Тяжёлый, JVM | ❌ |
+| FalkorDB | Redis-based, быстрый | Молодой | ⚠️ |
+| Kuzu | Embedded, Go-friendly | Нет UI | ✅ |
+| Adjacency list (JSON) | Просто, без зависимостей | Нет query language | ⚠️ |
+
+**Предварительный выбор:** Kuzu (embedded) или JSON adjacency list (для начала).
+
+### Схема графа
+
+```
+Node types:
+- Entity: {id, name, type, description}
+  types: person, company, concept, metric, technology, industry
+  
+- Event: {id, name, description, context}
+
+- Framework: {id, name, description, steps[]}
+
+Edge types:
+- causes: {from, to, mechanism, confidence}
+- enables: {from, to, condition}
+- prevents: {from, to, reason}
+- requires: {from, to, condition}
+- correlates: {from, to, strength}
+- example_of: {from, to}
+- part_of: {from, to}
+- contradicts: {from, to, explanation}
+```
+
+---
+
+## Query Engine
+
+### Алгоритм обхода графа
+
+```
+1. Entity extraction из query
+   → "какой бизнес в строительстве"
+   → entities: ["бизнес", "строительство"]
+
+2. Graph lookup
+   → Найти узлы: "бизнес", "строительство"
+   → Найти связанные: "АЗС", "склады", "логистика"
+
+3. Multi-hop traversal (depth=2-3)
+   → Для каждого узла: incoming + outgoing edges
+   → Построить paths до depth 3
+
+4. Path ranking
+   → По confidence relations
+   → По relevance к query (embedding similarity)
+
+5. Subgraph → LLM context
+   → 10-15 узлов с causal chains
+   → Prompt: "построй цепочку рассуждений"
+
+6. Output
+   → Answer + reasoning chain + sources
+```
+
+### Фильтрация по контексту (будущее)
+
+Если вернёмся к memory/profile:
+```
+User profile:
+  skills: [Go, Python, LLM]
+  gaps: [регуляторика пищевых продуктов]
+  
+Filter:
+  - исключить chains с "пищевая лицензия"
+  - приоритет chains с "автоматизация"
+```

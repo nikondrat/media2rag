@@ -12,19 +12,21 @@ import (
 )
 
 type ProgressEmitter struct {
-	inner      EventEmitter
-	p          *mpb.Progress
-	bar        *mpb.Bar
-	mu         sync.Mutex
-	total      int
-	current    int
-	fileName   string
-	stage      string
-	chunkIdx  int
-	chunkTot  int
-	start     time.Time
-	stageStart time.Time
-	completed int
+	inner             EventEmitter
+	p                 *mpb.Progress
+	bar               *mpb.Bar
+	mu                sync.Mutex
+	total             int
+	current           int
+	fileName          string
+	stage             string
+	chunkIdx          int
+	chunkTot          int
+	start             time.Time
+	stageStart        time.Time
+	completed         int
+	fileStart         time.Time
+	completedDuration time.Duration
 }
 
 func NewProgressEmitter(inner EventEmitter, total int) *ProgressEmitter {
@@ -82,11 +84,10 @@ func (e *ProgressEmitter) etaStr() string {
 	if e.completed < 1 {
 		return "ETA ..."
 	}
-	elapsed := time.Since(e.start)
-	perFile := elapsed / time.Duration(e.completed)
-	remaining := e.total - e.completed
+	perFile := e.completedDuration / time.Duration(e.completed)
+	remaining := e.total - e.current
 	eta := time.Duration(remaining) * perFile
-	return formatDur(eta)
+	return "ETA " + formatDur(eta)
 }
 
 func (e *ProgressEmitter) SetFile(idx int, name string) {
@@ -97,6 +98,7 @@ func (e *ProgressEmitter) SetFile(idx int, name string) {
 	e.chunkIdx = 0
 	e.chunkTot = 0
 	e.stageStart = time.Now()
+	e.fileStart = time.Now()
 	e.mu.Unlock()
 
 	if e.bar != nil {
@@ -159,9 +161,11 @@ func (e *ProgressEmitter) Emit(evt model.Event) {
 		e.stage = "assembling"
 	case "completed":
 		e.completed++
+		e.completedDuration += time.Since(e.fileStart)
 		e.stage = "done"
 	case "error":
 		e.completed++
+		e.completedDuration += time.Since(e.fileStart)
 		e.stage = "FAILED"
 	case "checkpoint_restore":
 		if data, ok := evt.Data.(map[string]string); ok {

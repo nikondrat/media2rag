@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-var splitDelimiters = []string{"\n\n\n", "\n\n", "\n", ". "}
-
 const minChunkSize = 200
+const minMergeSize = 500
 
 func (p *Pipeline) splitText(text string) ([]string, error) {
 	if p.checkpointDir != "" {
@@ -37,81 +36,102 @@ func splitTextPure(text string, cfg PipelineConfig) []string {
 		return []string{text}
 	}
 
-	overlap := cfg.ChunkOverlap
-	if overlap >= cfg.ChunkSize {
-		overlap = cfg.ChunkSize / 4
-	}
-	if overlap < minChunkSize/2 {
-		overlap = minChunkSize / 2
-	}
+	paragraphs := splitIntoParagraphs(text)
 
-	var chunks []string
-	start := 0
-	for start < len(text) {
-		end := start + cfg.ChunkSize
-		if end >= len(text) {
-			chunks = append(chunks, text[start:])
-			break
-		}
+	groups := groupParagraphs(paragraphs, cfg.ChunkSize)
+	groups = mergeSmallChunks(groups)
+	groups = filterEmptyChunks(groups)
 
-		splitAt := findSplitPoint(text, start, end)
-
-		if splitAt <= start {
-			splitAt = start + minChunkSize
-			if splitAt > len(text) {
-				splitAt = len(text)
-			}
-		}
-
-		if splitAt > len(text) {
-			splitAt = len(text)
-		}
-
-		chunks = append(chunks, text[start:splitAt])
-
-		nextStart := splitAt - overlap
-		if nextStart <= start {
-			nextStart = splitAt
-		}
-		if nextStart >= len(text) {
-			break
-		}
-		start = nextStart
-	}
-
-	return dedupChunkOverlap(chunks, overlap)
+	return groups
 }
 
-func dedupChunkOverlap(chunks []string, overlap int) []string {
+func splitIntoParagraphs(text string) []string {
+	var paragraphs []string
+	for _, p := range strings.Split(text, "\n\n") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			paragraphs = append(paragraphs, p)
+		}
+	}
+	return paragraphs
+}
+
+func groupParagraphs(paragraphs []string, maxLen int) []string {
+	if len(paragraphs) == 0 {
+		return nil
+	}
+
+	var groups []string
+	var current strings.Builder
+
+	for _, p := range paragraphs {
+		if len(p) > maxLen && current.Len() == 0 {
+			groups = append(groups, p)
+			continue
+		}
+
+		if current.Len()+len(p)+2 > maxLen && current.Len() > 0 {
+			groups = append(groups, current.String())
+			current.Reset()
+		}
+
+		if current.Len() > 0 {
+			current.WriteString("\n\n")
+		}
+		current.WriteString(p)
+	}
+
+	if current.Len() > 0 {
+		groups = append(groups, current.String())
+	}
+
+	return groups
+}
+
+func mergeSmallChunks(chunks []string) []string {
 	if len(chunks) <= 1 {
 		return chunks
 	}
 
-	deduped := make([]string, len(chunks))
-	copy(deduped, chunks)
+	var merged []string
+	pending := ""
 
-	for i := 1; i < len(deduped); i++ {
-		prev := deduped[i-1]
-		curr := deduped[i]
-		if overlap > 0 && len(prev) >= overlap {
-			tail := prev[len(prev)-overlap:]
-			if strings.HasPrefix(curr, tail) {
-				deduped[i] = curr[len(tail):]
+	for _, chunk := range chunks {
+		if len(chunk) < minMergeSize {
+			if pending == "" {
+				pending = chunk
+			} else {
+				pending += "\n\n" + chunk
 			}
+			continue
+		}
+
+		if pending != "" {
+			chunk = pending + "\n\n" + chunk
+			pending = ""
+		}
+		merged = append(merged, chunk)
+	}
+
+	if pending != "" {
+		if len(merged) > 0 {
+			merged[len(merged)-1] += "\n\n" + pending
+		} else {
+			merged = append(merged, pending)
 		}
 	}
 
-	return deduped
+	return merged
 }
 
-func findSplitPoint(text string, start, end int) int {
-	segment := text[start:end]
-	for _, delim := range splitDelimiters {
-		if idx := strings.LastIndex(segment, delim); idx > 0 {
-			return start + idx + len(delim)
+func filterEmptyChunks(chunks []string) []string {
+	var filtered []string
+	for _, c := range chunks {
+		if strings.TrimSpace(c) != "" {
+			filtered = append(filtered, c)
 		}
 	}
-	return end
+	return filtered
 }
 
 func loadChunks(dir string) []string {
@@ -136,27 +156,41 @@ func loadChunks(dir string) []string {
 		return ai < aj
 	})
 
-	chunks := make([]string, len(files))
-	for i, name := range files {
+	var chunks []string
+	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(dir, "chunks", name))
 		if err != nil {
 			return nil
 		}
-		chunks[i] = string(data)
+		content := string(data)
+		if strings.TrimSpace(content) != "" {
+			chunks = append(chunks, content)
+		}
+	}
+	if len(chunks) == 0 {
+		return nil
 	}
 	return chunks
 }
 
 func saveChunks(dir string, chunks []string) error {
 	chunkDir := filepath.Join(dir, "chunks")
+	if err := os.RemoveAll(chunkDir); err != nil {
+		return fmt.Errorf("clean chunk dir: %w", err)
+	}
 	if err := os.MkdirAll(chunkDir, 0755); err != nil {
 		return fmt.Errorf("create chunk dir: %w", err)
 	}
-	for i, chunk := range chunks {
-		name := fmt.Sprintf("chunk-%03d.md", i+1)
+	idx := 1
+	for _, chunk := range chunks {
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		name := fmt.Sprintf("chunk-%03d.md", idx)
 		if err := os.WriteFile(filepath.Join(chunkDir, name), []byte(chunk), 0644); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
 		}
+		idx++
 	}
 	return nil
 }

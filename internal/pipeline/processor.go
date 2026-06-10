@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"media2rag/internal/events"
+	"media2rag/internal/llm"
 	"media2rag/internal/model"
 )
 
@@ -74,6 +76,21 @@ func (p *Pipeline) processChunks(ctx context.Context, chunks []string, emitter e
 			}
 		}
 
+		if p.outputDir != "" {
+			resultPath := filepath.Join(p.outputDir, "results", fmt.Sprintf("result_%03d.json", i+1))
+			if data, err := os.ReadFile(resultPath); err == nil {
+				var r ChunkResult
+				if err := json.Unmarshal(data, &r); err == nil && r.Summary != "" {
+					results[i] = r
+					if p.status != nil {
+						p.status.ChunkDone(i)
+					}
+					emitter.Emit(model.Event{Type: EventCheckpointRestore, Data: map[string]string{"stage": fmt.Sprintf("chunk %d", i+1)}})
+					continue
+				}
+			}
+		}
+
 		if data, err := loadResultFromCheckpoint(p.checkpointDir, i); err == nil && data.Index == i {
 			results[i] = data
 			p.writeResultJSON(data)
@@ -117,7 +134,7 @@ func (p *Pipeline) processChunks(ctx context.Context, chunks []string, emitter e
 
 				emitter.Emit(model.Event{Type: EventProcessingChunk, Data: map[string]int{"chunk": j.index + 1, "total": total}})
 
-				r, err := p.processSingle(ctx, j.text)
+				r, err := p.processSingle(ctx, j.text, j.index, emitter)
 				if err != nil {
 					errCh <- fmt.Errorf("chunk %d: %w", j.index+1, err)
 					if p.status != nil {
@@ -164,28 +181,101 @@ func (p *Pipeline) processChunks(ctx context.Context, chunks []string, emitter e
 	return results, nil
 }
 
-func (p *Pipeline) processSingle(ctx context.Context, text string) (ChunkResult, error) {
-	result := ChunkResult{}
+var templateRe = regexp.MustCompile(`<\w+>`)
 
-	callCtx, cancel := p.timeoutCtx(ctx)
-	defer cancel()
-	start := time.Now()
-	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
-		Messages: []model.Message{
-			{Role: "system", Content: chunkPrompt},
-			{Role: "user", Content: text},
-		},
-	})
-	_ = start
+func safeFieldValue(line string, prefixLen int) string {
+	if len(line) <= prefixLen {
+		return ""
+	}
+	return strings.TrimSpace(line[prefixLen:])
+}
 
-	if err != nil {
-		return result, err
+func hasTemplateContent(r ChunkResult) bool {
+	fields := []string{r.Type, r.Topic, r.Summary, r.MyTakeaway, r.Applicability}
+	templateCount := 0
+	for _, f := range fields {
+		if templateRe.MatchString(f) {
+			templateCount++
+		}
+	}
+	return templateCount >= 2
+}
+
+type ValidationError struct {
+	Field  string
+	Reason string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("validation failed: %s: %s", e.Field, e.Reason)
+}
+
+func validateChunkResult(r ChunkResult) error {
+	if r.Type == "" {
+		return &ValidationError{Field: "type", Reason: "empty"}
+	}
+	if templateRe.MatchString(r.Type) {
+		return &ValidationError{Field: "type", Reason: "contains template placeholder"}
+	}
+	if hasTemplateContent(r) {
+		return &ValidationError{Field: "multiple", Reason: "response contains template placeholders"}
+	}
+	return nil
+}
+
+const retryPromptSuffix = `Your previous response was invalid. Common mistakes:
+- Returning the template format instead of actual values (e.g., "<type>" instead of "idea")
+- Leaving fields empty
+- Using a different language than the source text
+- Not following the exact format
+
+Please analyze the text again and return properly filled values in the exact format specified.`
+
+func (p *Pipeline) processSingle(ctx context.Context, text string, chunkIndex int, emitter events.EventEmitter) (ChunkResult, error) {
+	const maxRetries = 2
+	systemPrompt := chunkPrompt
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		callCtx, cancel := p.timeoutCtx(ctx)
+		callCtx = llm.WithStage(callCtx, "process")
+		callCtx = llm.WithChunkIndex(callCtx, chunkIndex)
+		callCtx = llm.WithRetryAttempt(callCtx, attempt)
+		start := time.Now()
+		resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+			Messages: []model.Message{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: text},
+			},
+		})
+		_ = start
+		cancel()
+
+		if err != nil {
+			return ChunkResult{}, err
+		}
+
+		parsed := parsePromptResult(resp.Message.Content)
+
+		if err := validateChunkResult(parsed); err != nil {
+			if attempt < maxRetries {
+				emitter.Emit(model.Event{
+					Type: EventProcessingRetry,
+					Data: map[string]interface{}{
+						"chunk":   chunkIndex + 1,
+						"attempt": attempt + 1,
+						"error":   err.Error(),
+					},
+				})
+				systemPrompt = chunkPrompt + "\n\n" + retryPromptSuffix + "\n\nPrevious invalid response:\n" + resp.Message.Content
+				continue
+			}
+			return ChunkResult{}, fmt.Errorf("chunk validation failed after %d retries: %w", maxRetries, err)
+		}
+
+		return parsed, nil
 	}
 
-	parsed := parsePromptResult(resp.Message.Content)
-	mergePromptResult(&result, parsed)
-
-	return result, nil
+	return ChunkResult{}, fmt.Errorf("unexpected: all retries exhausted")
 }
 
 func parsePromptResult(response string) ChunkResult {
@@ -194,27 +284,27 @@ func parsePromptResult(response string) ChunkResult {
 	for _, line := range lines {
 		lower := strings.ToLower(strings.TrimSpace(line))
 		if strings.HasPrefix(lower, "type:") {
-			r.Type = strings.TrimSpace(line[5:])
+			r.Type = safeFieldValue(line, 5)
 		} else if strings.HasPrefix(lower, "title:") {
-			r.Title = strings.TrimSpace(line[6:])
+			r.Title = safeFieldValue(line, 6)
 		} else if strings.HasPrefix(lower, "topic:") {
-			r.Topic = strings.TrimSpace(line[6:])
-			r.Topics = parseCommaList(line[6:])
+			r.Topic = safeFieldValue(line, 6)
+			r.Topics = parseCommaList(safeFieldValue(line, 6))
 		} else if strings.HasPrefix(lower, "summary:") {
-			r.Summary = strings.TrimSpace(line[8:])
+			r.Summary = safeFieldValue(line, 8)
 		} else if strings.HasPrefix(lower, "key_points:") {
-			r.KeyPoints = parseCommaList(line[11:])
+			r.KeyPoints = parseCommaList(safeFieldValue(line, 11))
 		} else if strings.HasPrefix(lower, "source_quote:") {
-			r.SourceQuote = strings.TrimSpace(line[13:])
+			r.SourceQuote = safeFieldValue(line, 13)
 		} else if strings.HasPrefix(lower, "my_takeaway:") {
-			r.MyTakeaway = strings.TrimSpace(line[12:])
+			r.MyTakeaway = safeFieldValue(line, 12)
 		} else if strings.HasPrefix(lower, "confidence:") {
-			val := strings.TrimSpace(line[11:])
+			val := safeFieldValue(line, 11)
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
 				r.Confidence = f
 			}
 		} else if strings.HasPrefix(lower, "applicability:") {
-			r.Applicability = strings.TrimSpace(line[15:])
+			r.Applicability = safeFieldValue(line, 14)
 		}
 	}
 	return r

@@ -10,8 +10,8 @@ import (
 )
 
 type ModelPricing struct {
-	InputPrice  float64 `json:"input_price"`
-	OutputPrice float64 `json:"output_price"`
+	InputPrice  float64
+	OutputPrice float64
 }
 
 var (
@@ -21,20 +21,22 @@ var (
 	pricingURL       = "https://models.dev/api.json"
 )
 
-var defaultPricing = map[string]ModelPricing{
-	"openrouter/free":                        {InputPrice: 0, OutputPrice: 0},
-	"deepseek/deepseek-v4-flash:free":        {InputPrice: 0, OutputPrice: 0},
-	"mistralai/mistral-nemo":                 {InputPrice: 0.5, OutputPrice: 1.5},
-	"nvidia/nemotron-3-super-120b-a12b:free": {InputPrice: 0, OutputPrice: 0},
-	"qwen/qwen3-coder:free":                  {InputPrice: 0, OutputPrice: 0},
-	"qwen/qwen3.5-9b":                        {InputPrice: 0.3, OutputPrice: 0.6},
-}
-
 func init() {
 	pricingCache = make(map[string]ModelPricing)
-	for k, v := range defaultPricing {
-		pricingCache[k] = v
-	}
+}
+
+type pricingAPIProvider struct {
+	Models map[string]pricingAPIModel `json:"models"`
+}
+
+type pricingAPIModel struct {
+	ID   string           `json:"id"`
+	Cost *pricingAPICost  `json:"cost"`
+}
+
+type pricingAPICost struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
 }
 
 func LoadPricing() error {
@@ -51,23 +53,27 @@ func LoadPricing() error {
 	}
 	defer resp.Body.Close()
 
-	var data map[string]struct {
-		InputPrice  float64 `json:"input_price"`
-		OutputPrice float64 `json:"output_price"`
-	}
-
+	var data map[string]pricingAPIProvider
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return fmt.Errorf("decode pricing: %w", err)
 	}
 
-	for model, p := range data {
-		key := strings.ToLower(model)
-		pricingCache[key] = ModelPricing{
-			InputPrice:  p.InputPrice,
-			OutputPrice: p.OutputPrice,
+	newCache := make(map[string]ModelPricing, len(data)*10)
+
+	for _, provider := range data {
+		for modelKey, m := range provider.Models {
+			if m.Cost == nil {
+				continue
+			}
+			key := strings.ToLower(modelKey)
+			newCache[key] = ModelPricing{
+				InputPrice:  m.Cost.Input,
+				OutputPrice: m.Cost.Output,
+			}
 		}
 	}
 
+	pricingCache = newCache
 	pricingCacheTime = time.Now()
 	return nil
 }
@@ -80,8 +86,25 @@ func GetPricing(model string) ModelPricing {
 		return p
 	}
 
-	for key, p := range pricingCache {
-		if strings.Contains(strings.ToLower(model), strings.ToLower(key)) {
+	if idx := strings.Index(model, "-20"); idx > 0 && len(model[idx:]) == 9 {
+		allDigits := true
+		for _, c := range model[idx+1:] {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			base := model[:idx]
+			if p, ok := pricingCache[base]; ok {
+				return p
+			}
+		}
+	}
+
+	if idx := strings.LastIndex(model, ":"); idx > 0 {
+		base := model[:idx]
+		if p, ok := pricingCache[base]; ok {
 			return p
 		}
 	}
@@ -91,6 +114,5 @@ func GetPricing(model string) ModelPricing {
 
 func CalculateCost(model string, promptTokens, completionTokens int) float64 {
 	p := GetPricing(model)
-	cost := (float64(promptTokens)/1_000_000)*p.InputPrice + (float64(completionTokens)/1_000_000)*p.OutputPrice
-	return cost
+	return (float64(promptTokens)/1_000_000)*p.InputPrice + (float64(completionTokens)/1_000_000)*p.OutputPrice
 }

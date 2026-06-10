@@ -24,22 +24,38 @@ const (
 )
 
 type ChunkStatus struct {
-	Index   int    `yaml:"index"`
-	Done    bool   `yaml:"done"`
-	Failed  bool   `yaml:"failed,omitempty"`
-	Error   string `yaml:"error,omitempty"`
+	Index     int     `yaml:"index"`
+	Done      bool    `yaml:"done"`
+	Failed    bool    `yaml:"failed,omitempty"`
+	Error     string  `yaml:"error,omitempty"`
+	Cost      float64 `yaml:"cost,omitempty"`
+	TokensIn  int     `yaml:"tokens_in,omitempty"`
+	TokensOut int     `yaml:"tokens_out,omitempty"`
+	Model     string  `yaml:"model,omitempty"`
+	LatencyMs int64   `yaml:"latency_ms,omitempty"`
+}
+
+type StageCost struct {
+	Calls     int     `yaml:"calls"`
+	Cost      float64 `yaml:"cost"`
+	TokensIn  int     `yaml:"tokens_in"`
+	TokensOut int     `yaml:"tokens_out"`
 }
 
 type PipelineStatus struct {
-	mu             sync.Mutex
-	filePath       string
-	Source         string        `yaml:"source"`
-	Stage          Stage         `yaml:"stage"`
-	ChunksTotal    int           `yaml:"chunks_total"`
-	Chunks         []ChunkStatus `yaml:"chunks,omitempty"`
-	FailedAt       string        `yaml:"failed_at,omitempty"`
-	StartedAt      time.Time     `yaml:"started_at"`
-	UpdatedAt      time.Time     `yaml:"updated_at"`
+	mu              sync.Mutex
+	filePath        string
+	Source          string              `yaml:"source"`
+	Stage           Stage               `yaml:"stage"`
+	ChunksTotal     int                 `yaml:"chunks_total"`
+	Chunks          []ChunkStatus       `yaml:"chunks,omitempty"`
+	FailedAt        string              `yaml:"failed_at,omitempty"`
+	StartedAt       time.Time           `yaml:"started_at"`
+	UpdatedAt       time.Time           `yaml:"updated_at"`
+	TotalCost       float64             `yaml:"total_cost,omitempty"`
+	TotalTokensIn   int                 `yaml:"total_tokens_in,omitempty"`
+	TotalTokensOut  int                 `yaml:"total_tokens_out,omitempty"`
+	StageBreakdown  map[string]StageCost `yaml:"stage_breakdown,omitempty"`
 }
 
 func LoadStatus(dir string) *PipelineStatus {
@@ -82,9 +98,14 @@ func (s *PipelineStatus) SetChunks(total int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ChunksTotal = total
+	oldChunks := s.Chunks
 	s.Chunks = make([]ChunkStatus, total)
 	for i := range s.Chunks {
-		s.Chunks[i] = ChunkStatus{Index: i}
+		if i < len(oldChunks) {
+			s.Chunks[i] = oldChunks[i]
+		} else {
+			s.Chunks[i] = ChunkStatus{Index: i}
+		}
 	}
 	s.UpdatedAt = time.Now()
 	s.Save()
@@ -94,7 +115,16 @@ func (s *PipelineStatus) ChunkDone(index int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if index >= 0 && index < len(s.Chunks) {
-		s.Chunks[index] = ChunkStatus{Index: index, Done: true}
+		existing := s.Chunks[index]
+		s.Chunks[index] = ChunkStatus{
+			Index:     index,
+			Done:      true,
+			Cost:      existing.Cost,
+			TokensIn:  existing.TokensIn,
+			TokensOut: existing.TokensOut,
+			Model:     existing.Model,
+			LatencyMs: existing.LatencyMs,
+		}
 	}
 	s.UpdatedAt = time.Now()
 	s.Save()
@@ -104,7 +134,17 @@ func (s *PipelineStatus) ChunkFailed(index int, errMsg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if index >= 0 && index < len(s.Chunks) {
-		s.Chunks[index] = ChunkStatus{Index: index, Failed: true, Error: errMsg}
+		existing := s.Chunks[index]
+		s.Chunks[index] = ChunkStatus{
+			Index:     index,
+			Failed:    true,
+			Error:     errMsg,
+			Cost:      existing.Cost,
+			TokensIn:  existing.TokensIn,
+			TokensOut: existing.TokensOut,
+			Model:     existing.Model,
+			LatencyMs: existing.LatencyMs,
+		}
 	}
 	s.UpdatedAt = time.Now()
 	s.Save()
