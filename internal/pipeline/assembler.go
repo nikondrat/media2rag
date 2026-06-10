@@ -11,12 +11,15 @@ import (
 )
 
 type assembleOpts struct {
-	source     string
-	docType    string
-	author     string
-	language   string
-	domains    []string
-	coreThesis string
+	source          string
+	docType         string
+	author          string
+	language        string
+	domains         []string
+	coreThesis      string
+	causalChains    []model.CausalLink
+	preconditions   []string
+	counterfactuals []string
 }
 
 type AssemblyInput struct {
@@ -57,6 +60,15 @@ func assemble(results []ChunkResult, opts assembleOpts) *model.RAGDocument {
 	holisticText := ""
 	if opts.coreThesis != "" {
 		holisticText = "## Holistic Analysis\n\n" + opts.coreThesis + "\n"
+	}
+	if len(opts.causalChains) > 0 {
+		holisticText += "\n## Causal Chains\n\n" + formatCausalMarkdown(opts.causalChains)
+	}
+	if len(opts.preconditions) > 0 {
+		holisticText += "\n## Preconditions\n\n" + bulletList(opts.preconditions)
+	}
+	if len(opts.counterfactuals) > 0 {
+		holisticText += "\n## Counterfactuals\n\n" + bulletList(opts.counterfactuals)
 	}
 	input.HolisticAnalysis = holisticText
 
@@ -109,16 +121,19 @@ func assemble(results []ChunkResult, opts assembleOpts) *model.RAGDocument {
 		Markdown: markdown,
 		Chunks:   docChunks,
 		Metadata: model.DocumentMetadata{
-			Title:      title,
-			Author:     opts.author,
-			Source:     opts.source,
-			DocType:    opts.docType,
-			Language:   opts.language,
-			Domains:    opts.domains,
-			CoreThesis: opts.coreThesis,
-			Topics:     topics,
-			Takeaways:  takeaways,
-			Status:     "processed",
+			Title:           title,
+			Author:          opts.author,
+			Source:          opts.source,
+			DocType:         opts.docType,
+			Language:        opts.language,
+			Domains:         opts.domains,
+			CoreThesis:      opts.coreThesis,
+			Topics:          topics,
+			Takeaways:       takeaways,
+			Status:          "processed",
+			CausalChains:    opts.causalChains,
+			Preconditions:   opts.preconditions,
+			Counterfactuals: opts.counterfactuals,
 		},
 	}
 
@@ -350,4 +365,26 @@ func ConfidenceToString(c float64) string {
 	default:
 		return "low"
 	}
+}
+
+func formatCausalMarkdown(chains []model.CausalLink) string {
+	var b strings.Builder
+	for _, c := range chains {
+		if c.Mechanism != "" {
+			b.WriteString(fmt.Sprintf("- **%s** → %s → **%s** *(%s)*\n", c.Cause, c.Mechanism, c.Effect, c.Relation))
+		} else {
+			b.WriteString(fmt.Sprintf("- **%s** → **%s** *(%s)*\n", c.Cause, c.Effect, c.Relation))
+		}
+	}
+	return b.String()
+}
+
+func bulletList(items []string) string {
+	var b strings.Builder
+	for _, item := range items {
+		b.WriteString("- ")
+		b.WriteString(item)
+		b.WriteString("\n")
+	}
+	return b.String()
 }

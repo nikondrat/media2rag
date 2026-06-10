@@ -28,6 +28,8 @@ const (
 	EventProcessingDone      = "processing_done"
 	EventHolisticAnalysis    = "holistic_analysis"
 	EventHolisticDone        = "holistic_done"
+	EventCausalExtraction    = "causal_extraction"
+	EventCausalDone          = "causal_done"
 	EventContextEnrich       = "context_enrichment"
 	EventContextEnrichDone   = "context_enrichment_done"
 	EventAssembling          = "assembling"
@@ -69,22 +71,59 @@ Chunk: "The goal is to get 15-20 measurements per week. At the meeting, you prop
 Example output:
 This is from a lecture on scaling a construction business to 1 million rubles profit, discussing the key stage of the sales funnel — getting measurements and signing contracts with prepayment.`
 
+const causalExtractPrompt = `Analyze the following document (chunk summaries in order) and extract causal relationships between concepts. Focus on:
+
+1. causal_chains: Direct cause-effect relationships found in the content
+   Format: cause -> mechanism -> effect
+   Relation types: causes, enables, prevents, requires, correlates
+
+2. preconditions: Conditions that make events/processes possible ("If X, then Y becomes possible")
+
+3. counterfactuals: What would change if a key factor were removed ("Without X, Y would not happen")
+
+Rules:
+- Extract only relationships explicitly stated or strongly implied in the text
+- Do NOT invent causal relationships — only extract from content
+- Write in the same language as the source material
+- Be specific: name the actual concepts, not generic terms
+
+Return in this exact format:
+causal_chains:
+- cause: <cause>
+  mechanism: <how it works>
+  effect: <effect>
+  relation: <causes|enables|prevents|requires|correlates>
+
+- cause: <cause>
+  mechanism: <how it works>
+  effect: <effect>
+  relation: <causes|enables|prevents|requires|correlates>
+
+preconditions:
+- <precondition 1>
+- <precondition 2>
+
+counterfactuals:
+- <counterfactual 1>
+- <counterfactual 2>`
+
 type ChunkResult struct {
-	Index         int      `json:"index"`
-	Title         string   `json:"title"`
-	Type          string   `json:"type"`
-	Topic         string   `json:"topic"`
-	Topics        []string `json:"topics"`
-	Summary       string   `json:"summary"`
-	Content       string   `json:"content"`
-	Context       string   `json:"context,omitempty"`
-	KeyPoints     []string `json:"key_points,omitempty"`
-	SourceQuote   string   `json:"source_quote,omitempty"`
-	MyTakeaway    string   `json:"my_takeaway,omitempty"`
-	Confidence    float64  `json:"confidence,omitempty"`
-	Applicability string   `json:"applicability,omitempty"`
-	Steps         []string `json:"steps,omitempty"`
-	Domains       []string `json:"domains,omitempty"`
+	Index         int              `json:"index"`
+	Title         string           `json:"title"`
+	Type          string           `json:"type"`
+	Topic         string           `json:"topic"`
+	Topics        []string         `json:"topics"`
+	Summary       string           `json:"summary"`
+	Content       string           `json:"content"`
+	Context       string           `json:"context,omitempty"`
+	KeyPoints     []string         `json:"key_points,omitempty"`
+	SourceQuote   string           `json:"source_quote,omitempty"`
+	MyTakeaway    string           `json:"my_takeaway,omitempty"`
+	Confidence    float64          `json:"confidence,omitempty"`
+	Applicability string           `json:"applicability,omitempty"`
+	Steps         []string         `json:"steps,omitempty"`
+	Domains       []string         `json:"domains,omitempty"`
+	CausalChains  []model.CausalLink `json:"causal_chains,omitempty"`
 }
 
 type PipelineConfig struct {
@@ -242,6 +281,28 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 		emitter.Emit(model.Event{Type: EventHolisticDone})
 	}
 
+	var causalChains []model.CausalLink
+	var preconditions []string
+	var counterfactuals []string
+	if p.config.HolisticAnalysis {
+		if p.status != nil {
+			p.status.SetStage(StageCausal)
+		}
+		emitter.Emit(model.Event{Type: EventCausalExtraction})
+		causalChains, preconditions, counterfactuals, err = p.causalExtraction(ctx, results)
+		if err != nil {
+			emitter.Emit(model.Event{Type: "causal_extraction_error", Data: map[string]string{"error": err.Error()}})
+		}
+		if p.outputDir != "" && len(causalChains) > 0 {
+			causalData := fmt.Sprintf("## Causal Chains\n\n%s\n\n## Preconditions\n\n%s\n\n## Counterfactuals\n\n%s",
+				formatCausalChains(causalChains),
+				strings.Join(preconditions, "\n"),
+				strings.Join(counterfactuals, "\n"))
+			_ = os.WriteFile(filepath.Join(p.outputDir, "intermediate", "causal.md"), []byte(causalData), 0644)
+		}
+		emitter.Emit(model.Event{Type: EventCausalDone})
+	}
+
 	emitter.Emit(model.Event{Type: EventContextEnrich})
 	if err := p.contextualEnrich(ctx, results, holistic.coreThesis, emitter); err != nil {
 		emitter.Emit(model.Event{Type: "context_enrichment_error", Data: map[string]string{"error": err.Error()}})
@@ -250,12 +311,15 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 
 	emitter.Emit(model.Event{Type: EventAssembling})
 	doc := assemble(results, assembleOpts{
-		source:     p.source,
-		docType:    p.docType,
-		author:     p.author,
-		language:   p.language,
-		domains:    holistic.domains,
-		coreThesis: holistic.coreThesis,
+		source:        p.source,
+		docType:       p.docType,
+		author:        p.author,
+		language:      p.language,
+		domains:       holistic.domains,
+		coreThesis:    holistic.coreThesis,
+		causalChains:  causalChains,
+		preconditions: preconditions,
+		counterfactuals: counterfactuals,
 	})
 	doc.CleanedText = cleaned
 	doc.Metadata.CoreThesis = holistic.coreThesis
@@ -490,6 +554,107 @@ func (p *Pipeline) holisticAnalysis(ctx context.Context, results []ChunkResult) 
 		}
 	}
 	return coreThesis, domains, nil
+}
+
+func (p *Pipeline) causalExtraction(ctx context.Context, results []ChunkResult) ([]model.CausalLink, []string, []string, error) {
+	var summaries []string
+	for _, r := range results {
+		if r.Summary != "" {
+			summaries = append(summaries, fmt.Sprintf("[chunk %d] %s", r.Index+1, r.Summary))
+		}
+		if len(r.KeyPoints) > 0 {
+			summaries = append(summaries, "  Key points: "+strings.Join(r.KeyPoints, "; "))
+		}
+	}
+	if len(summaries) == 0 {
+		return nil, nil, nil, nil
+	}
+
+	combined := strings.Join(summaries, "\n")
+	callCtx, cancel := p.timeoutCtx(ctx)
+	defer cancel()
+	resp, err := p.llmClient.Chat(callCtx, model.ChatRequest{
+		Messages: []model.Message{
+			{Role: "system", Content: causalExtractPrompt},
+			{Role: "user", Content: combined},
+		},
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	var chains []model.CausalLink
+	var preconditions []string
+	var counterfactuals []string
+
+	lines := strings.Split(resp.Message.Content, "\n")
+	var currentChain *model.CausalLink
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		if strings.HasPrefix(lower, "- cause:") {
+			if currentChain != nil {
+				chains = append(chains, *currentChain)
+			}
+			currentChain = &model.CausalLink{Cause: strings.TrimSpace(trimmed[8:])}
+		} else if currentChain != nil {
+			if strings.HasPrefix(lower, "mechanism:") {
+				currentChain.Mechanism = strings.TrimSpace(trimmed[10:])
+			} else if strings.HasPrefix(lower, "effect:") {
+				currentChain.Effect = strings.TrimSpace(trimmed[7:])
+			} else if strings.HasPrefix(lower, "relation:") {
+				currentChain.Relation = strings.TrimSpace(trimmed[9:])
+			} else if strings.HasPrefix(lower, "- ") {
+				if currentChain != nil {
+					chains = append(chains, *currentChain)
+					currentChain = nil
+				}
+			}
+		} else if strings.HasPrefix(lower, "- ") && !strings.HasPrefix(lower, "- cause:") {
+			content := strings.TrimSpace(trimmed[2:])
+			if inSection(lines, line, "preconditions") {
+				preconditions = append(preconditions, content)
+			} else if inSection(lines, line, "counterfactuals") {
+				counterfactuals = append(counterfactuals, content)
+			}
+		}
+	}
+	if currentChain != nil {
+		chains = append(chains, *currentChain)
+	}
+
+	return chains, preconditions, counterfactuals, nil
+}
+
+func inSection(lines []string, currentLine string, sectionName string) bool {
+	found := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.ToLower(trimmed) == sectionName+":" {
+			found = true
+		}
+		if trimmed == currentLine {
+			return found
+		}
+		if strings.HasPrefix(strings.ToLower(trimmed), "causal_chains:") && sectionName != "causal_chains" {
+			found = false
+		}
+	}
+	return false
+}
+
+func formatCausalChains(chains []model.CausalLink) string {
+	var b strings.Builder
+	for _, c := range chains {
+		if c.Mechanism != "" {
+			b.WriteString(fmt.Sprintf("- %s → %s → %s (%s)\n", c.Cause, c.Mechanism, c.Effect, c.Relation))
+		} else {
+			b.WriteString(fmt.Sprintf("- %s → %s (%s)\n", c.Cause, c.Effect, c.Relation))
+		}
+	}
+	return b.String()
 }
 
 func (p *Pipeline) timeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {

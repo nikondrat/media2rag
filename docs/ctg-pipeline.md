@@ -29,7 +29,16 @@ Raw text
   └── Chunk N ──► [Process] — LLM: title + topics + summary
   │
   ▼
-[Assemble] — Merge chunks → final MD
+[Holistic] — LLM: core_thesis + domains (1 call, все summaries)
+  │
+  ▼
+[Causal] — LLM: causal_chains + preconditions + counterfactuals (1 call)
+  │
+  ▼
+[Context Enrich] — LLM: per-chunk context (параллельно)
+  │
+  ▼
+[Assemble] — Merge chunks → final MD с causal секциями
 ```
 
 ### 1. Compress
@@ -184,8 +193,35 @@ Pipeline эмитит события для клиента (GUI):
 | v4 | key terms | key_terms: []KeyTerm |
 | v5 | core thesis | core_thesis: string |
 | v6 | takeaways | takeaways: []string |
+| v7 | **causal extraction** | causal_chains, preconditions, counterfactuals |
 
 Каждый новый промпт добавляется как ещё один параллельный LLM вызов к тому же чанку. Ничего не ломается — только обогащается.
+
+### Causal Extraction (v7)
+
+**Stage 2: Relational Extraction** — один LLM вызов на весь документ (после Holistic):
+
+```
+Prompt: Analyze chunk summaries → extract causal relationships
+Output:
+  causal_chains: [cause → mechanism → effect] with relation type
+  preconditions: conditions that enable processes
+  counterfactuals: what changes if a factor is removed
+```
+
+**Почему document-level, не per-chunk:**
+- Causality часто跨-чанковая (причина в chunk 3, следствие в chunk 7)
+- Один вызов = дешевле, чем N вызовов
+- LLM видит полную картину, а не изолированные фрагменты
+
+**Edge types:**
+| Edge | Описание |
+|------|----------|
+| `causes` | A непосредственно вызывает B |
+| `enables` | A делает B возможным |
+| `prevents` | A блокирует B |
+| `requires` | B невозможно без A |
+| `correlates` | A и B связаны, но causality неясна |
 
 ---
 

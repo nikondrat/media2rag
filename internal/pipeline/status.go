@@ -17,6 +17,7 @@ const (
 	StageSplit        Stage = "split"
 	StageProcessing   Stage = "processing"
 	StageHolistic     Stage = "holistic"
+	StageCausal       Stage = "causal"
 	StageContextEnrich Stage = "context_enrichment"
 	StageDone        Stage = "done"
 	StageFailed      Stage = "failed"
