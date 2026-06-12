@@ -13,7 +13,7 @@
 | Telemetry + Pricing | ✅ Работает |
 | LLM parsing (robust) | ⚠️ Улучшено, multi-line поля ещё хрупкие |
 | Batch statistics | ⏳ Только базовые (processed/skipped/failed) |
-| RAG + GraphRAG команды | ✅ CLI команды реализованы |
+| Qdrant vector search | ✅ RAG команда реализована |
 | New formats (PDF, audio...) | ❌ Пока .md + URL |
 
 ## Phase 1: CLI стабилизация (Now)
@@ -32,24 +32,19 @@
 
 ---
 
-## Phase 2: RAG + GraphRAG (CLI команды) ✅ COMPLETE
+## Phase 2: RAG + Qdrant (CLI команды) ✅ COMPLETE
 
-**Цель:** Каузальный поиск по знаниям.
+**Цель:** Векторный поиск по знаниям.
 
 ### Реализовано
 - [x] Qdrant client (HTTP API)
-- [x] Команда `media2rag index` — индексация chunks в Qdrant + построение Knowledge Graph
+- [x] Команда `media2rag index` — индексация chunks в Qdrant
 - [x] Команда `media2rag rag <query>` — hybrid search (dense + sparse + RRF)
-- [x] Knowledge Graph extraction из chunks (12 entity types, 14 relation types)
-- [x] Entity deduplication (embedding similarity + LLM resolution)
-- [x] Community detection (topic-based clustering + LLM summaries)
-- [x] Query Rewriter (natural language → structured query)
-- [x] Команда `media2rag graphrag <query>` — local + global + DRIFT search
-- [x] JSON output для AI агентов (Hermes и др.)
-- [x] Graph storage (JSON adjacency list with indexes)
-- [x] Graph validation (no orphan edges, valid types)
+- [x] JSON output для AI агентов
 
-**Метрика:** Запрос "какой бизнес в логистике" возвращает цепочку: проблема → решение → возможность.
+**Метрика:** Запрос "какой бизнес в логистике" возвращает релевантные chunks.
+
+> GraphRAG вынесен в отдельную ветку `experimental/graphrag`.
 
 ---
 
@@ -63,13 +58,13 @@
 hermes> Проанализируй рынок складской недвижимости
 
 # Агент вызывает media2rag
-media2rag graphrag "рынок складов" --format json
+media2rag rag "рынок складов" --format json
 
-# Получает causal chains + opportunities
-# Строит отчёт на основе графа знаний
+# Получает релевантные chunks с метаданными
+# Строит отчёт на основе поиска
 ```
 
-**Метрика:** AI агент самостоятельно проводит анализ, используя GraphRAG.
+**Метрика:** AI агент самостоятельно проводит анализ, используя RAG.
 
 ---
 
@@ -85,7 +80,7 @@ User Profile Graph:
   [weaknesses] → over-engineering
 ```
 
-При запросе GraphRAG подбирает релевантные знания о пользователе и применяет их.
+При запросе RAG подбирает релевантные знания о пользователе и применяет их.
 
 **Решение:** Обсудить отдельно, нужно ли.
 
@@ -94,7 +89,7 @@ User Profile Graph:
 ## Why This Order
 
 1. **Стабильность** → без надёжного pipeline ничего не работает
-2. **RAG/GraphRAG** → ядро системы, каузальный поиск
+2. **RAG** → ядро системы, векторный поиск
 3. **AI агенты** → используют готовые CLI команды как tools
 4. **Memory** → опционально, если будет запрос
 
@@ -108,10 +103,10 @@ User Profile Graph:
 |---|---|---|---|---|
 | Подготовка данных | Нет | Нет | Нет | CTG Pipeline |
 | Качество ответа | Среднее | Среднее | Среднее | Высокое |
-| GraphRAG | Нет | Нет | Нет | ✅ |
+| Knowledge Graph | Ветка experimental | Нет | Нет | Ветка experimental |
 | Causal chains | Нет | Нет | Нет | ✅ |
 | AI agent integration | Нет | Нет | Ограничено | CLI tool |
 | Стабильность | Падает на 200 файлах | Облако | Docker | Single binary |
 | Локальность | Docker | Нет | Docker | Да |
 
-**Наше отличие:** данные подготовлены + каузальный граф → AI отвечает цепочками рассуждений, а не просто похожими текстами.
+**Наше отличие:** данные подготовлены + CTG Pipeline → AI отвечает с контекстом, а не просто похожими текстами.

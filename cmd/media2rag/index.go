@@ -11,9 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"media2rag/internal/graph"
 	"media2rag/internal/llm"
-	"media2rag/internal/model"
 	"media2rag/internal/qdrant"
 	"media2rag/internal/workspace"
 )
@@ -22,10 +20,6 @@ var (
 	indexQdrantURL       string
 	indexQdrantAPIKey    string
 	indexCollection      string
-	indexGraphPath       string
-	indexCommunitiesPath string
-	indexIncremental     bool
-	indexConcurrency     int
 	indexBackend         string
 	indexModel           string
 	indexEmbedModel      string
@@ -34,9 +28,8 @@ var (
 
 var indexCmd = &cobra.Command{
 	Use:   "index [dir]",
-	Short: "Index all RAGDocuments into Qdrant and build Knowledge Graph",
-	Long: `Index all processed documents into Qdrant for vector search
-and build a Knowledge Graph with entities and relations extracted from chunks.
+	Short: "Index RAGDocuments into Qdrant for vector search",
+	Long: `Index processed documents into Qdrant for vector search.
 
 Accepts either a workspace directory (created by 'media2rag process') or
 a directory of flat .md files with chunk frontmatter.
@@ -44,10 +37,16 @@ a directory of flat .md files with chunk frontmatter.
 Usage:
   media2rag index                              # index from default workspace
   media2rag index /path/to/results/            # index flat .md files
-  media2rag index ~/.media2rag/workspace       # index workspace
-  media2rag index --incremental                # only index new/changed documents`,
+  media2rag index ~/.media2rag/workspace       # index workspace`,
 	Args: cobra.MaximumNArgs(1),
 	RunE:  runIndex,
+}
+
+type chunkInput struct {
+	DocID      string
+	ChunkIndex int
+	Content    string
+	Topic      string
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -60,15 +59,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	if len(args) > 0 {
 		inputDir = args[0]
-	}
-
-	// Determine output paths
-	dataDir := filepath.Join(inputDir, "data")
-	if indexGraphPath == "" {
-		indexGraphPath = filepath.Join(dataDir, "graph.json")
-	}
-	if indexCommunitiesPath == "" {
-		indexCommunitiesPath = filepath.Join(dataDir, "graph_communities.json")
 	}
 
 	// Setup LLM clients
@@ -89,15 +79,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		embedBackend = backend
 	}
 
-	extractClient, err := llm.NewClient(
-		ctx, backend, cfg.LLM.OllamaURL, modelName,
-		cfg.LLM.OpenRouterURL, cfg.LLM.OpenRouterKey, cfg.LLM.LMStudioURL,
-		time.Duration(cfg.LLM.Timeout)*time.Second,
-	)
-	if err != nil {
-		return fmt.Errorf("init LLM client: %w", err)
-	}
-
 	embedClient, err := llm.NewClient(
 		ctx, embedBackend, cfg.LLM.OllamaURL, embedModelName,
 		cfg.LLM.OpenRouterURL, cfg.LLM.OpenRouterKey, cfg.LLM.LMStudioURL,
@@ -108,18 +89,17 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	// Collect chunks from input
-	var allChunks []graph.ChunkInput
-	var allChunksWithTopic []graph.ChunkWithTopic
+	var allChunks []chunkInput
 
 	// Detect input type: workspace or flat .md files
 	isWorkspace := isWorkspaceDir(inputDir)
 
 	if isWorkspace {
 		fmt.Fprintf(os.Stderr, "Detected workspace directory: %s\n", inputDir)
-		allChunks, allChunksWithTopic, err = collectWorkspaceChunks(inputDir)
+		allChunks, err = collectWorkspaceChunks(inputDir)
 	} else {
 		fmt.Fprintf(os.Stderr, "Detected flat .md files directory: %s\n", inputDir)
-		allChunks, allChunksWithTopic, err = collectFlatFileChunks(inputDir)
+		allChunks, err = collectFlatFileChunks(inputDir)
 	}
 	if err != nil {
 		return err
@@ -184,100 +164,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// --- Graph extraction ---
-	fmt.Fprintf(os.Stderr, "Extracting entities and relations from %d chunks...\n", len(allChunks))
-
-	extractor := graph.NewEntityExtractor(extractClient, indexConcurrency, modelName)
-	results := extractor.ExtractBatch(ctx, allChunks, nil)
-
-	graphData := model.NewKnowledgeGraph()
-	for _, result := range results {
-		if result.Err != nil {
-			continue
-		}
-		for _, node := range result.Nodes {
-			graphData.AddNode(node)
-		}
-		for _, edge := range result.Edges {
-			graphData.AddEdge(edge)
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "Extracted %d nodes, %d edges\n", len(graphData.Nodes), len(graphData.Edges))
-
-	// Deduplicate
-	fmt.Fprintf(os.Stderr, "Deduplicating entities...\n")
-	resolver := graph.NewEntityResolver(extractClient, embedClient, modelName)
-	dedupedNodes, err := resolver.Resolve(ctx, graphData.Nodes)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: entity resolution failed: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "Deduplicated: %d → %d nodes\n", len(graphData.Nodes), len(dedupedNodes))
-		graphData = model.NewKnowledgeGraph()
-		for _, node := range dedupedNodes {
-			graphData.AddNode(node)
-		}
-		for _, result := range results {
-			if result.Err != nil {
-				continue
-			}
-			for _, edge := range result.Edges {
-				if _, fromOk := graphData.GetNodeByID(edge.From); fromOk {
-					if _, toOk := graphData.GetNodeByID(edge.To); toOk {
-						graphData.AddEdge(edge)
-					}
-				}
-			}
-		}
-	}
-
-	graphData.BuildIndexes()
-	if err := graphData.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: graph validation: %v\n", err)
-	}
-
-	// Save graph
-	if err := os.MkdirAll(filepath.Dir(indexGraphPath), 0755); err != nil {
-		return fmt.Errorf("create data dir: %w", err)
-	}
-	if err := graph.SaveGraph(graphData, indexGraphPath); err != nil {
-		return fmt.Errorf("save graph: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Saved graph to %s\n", indexGraphPath)
-
-	// --- Community detection ---
-	fmt.Fprintf(os.Stderr, "Detecting communities...\n")
-
-	detector := graph.NewCommunityDetector(extractClient, modelName)
-	communities := detector.DetectGroups(allChunksWithTopic)
-	fmt.Fprintf(os.Stderr, "Found %d communities\n", len(communities))
-
-	fmt.Fprintf(os.Stderr, "Generating community summaries...\n")
-	if err := detector.GenerateSummaries(ctx, communities, allChunksWithTopic); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: community summary generation: %v\n", err)
-	}
-
-	if err := detector.GenerateDomainHierarchy(ctx, communities); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: domain hierarchy generation: %v\n", err)
-	}
-
-	graph.LinkCommunitiesToGraph(communities, graphData)
-
-	if err := graph.SaveCommunities(communities, indexCommunitiesPath); err != nil {
-		return fmt.Errorf("save communities: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Saved communities to %s\n", indexCommunitiesPath)
-
 	fmt.Fprintf(os.Stderr, "\n✓ Indexing complete!\n")
-	fmt.Fprintf(os.Stderr, "  Graph: %s\n", indexGraphPath)
-	fmt.Fprintf(os.Stderr, "  Communities: %s\n", indexCommunitiesPath)
-	fmt.Fprintf(os.Stderr, "  Nodes: %d, Edges: %d, Communities: %d\n", len(graphData.Nodes), len(graphData.Edges), len(communities))
 
 	return nil
 }
 
 func isWorkspaceDir(dir string) bool {
-	// Workspace has hash-named directories (8 hex chars)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
@@ -290,26 +182,25 @@ func isWorkspaceDir(dir string) bool {
 	return false
 }
 
-func collectWorkspaceChunks(workspaceDir string) ([]graph.ChunkInput, []graph.ChunkWithTopic, error) {
+func collectWorkspaceChunks(workspaceDir string) ([]chunkInput, error) {
 	ws, err := workspace.New(workspaceDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("workspace: %w", err)
+		return nil, fmt.Errorf("workspace: %w", err)
 	}
 
 	docs, err := ws.ListDocuments()
 	if err != nil {
-		return nil, nil, fmt.Errorf("list documents: %w", err)
+		return nil, fmt.Errorf("list documents: %w", err)
 	}
 
 	if len(docs) == 0 {
 		fmt.Fprintf(os.Stderr, "No documents found in workspace\n")
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	fmt.Fprintf(os.Stderr, "Found %d documents in workspace\n", len(docs))
 
-	var allChunks []graph.ChunkInput
-	var allChunksWithTopic []graph.ChunkWithTopic
+	var allChunks []chunkInput
 
 	for _, doc := range docs {
 		latestPath := filepath.Join(ws.RootPath, doc.Hash, "latest")
@@ -336,29 +227,23 @@ func collectWorkspaceChunks(workspaceDir string) ([]graph.ChunkInput, []graph.Ch
 		chunks := parseChunksFromMarkdown(string(content), doc.Hash)
 		for i, ch := range chunks {
 			chunkID := fmt.Sprintf("%s:chunk_%d", doc.Hash, i)
-			allChunks = append(allChunks, graph.ChunkInput{
+			allChunks = append(allChunks, chunkInput{
 				DocID:      doc.Hash,
 				ChunkIndex: i,
 				Content:    ch.Content,
 				Topic:      ch.Topic,
 			})
-			allChunksWithTopic = append(allChunksWithTopic, graph.ChunkWithTopic{
-				ID:        chunkID,
-				Topic:     ch.Topic,
-				Summary:   ch.Summary,
-				KeyPoints: ch.KeyPoints,
-				Content:   ch.Content,
-			})
+			_ = chunkID
 		}
 	}
 
-	return allChunks, allChunksWithTopic, nil
+	return allChunks, nil
 }
 
-func collectFlatFileChunks(dir string) ([]graph.ChunkInput, []graph.ChunkWithTopic, error) {
+func collectFlatFileChunks(dir string) ([]chunkInput, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read directory: %w", err)
+		return nil, fmt.Errorf("read directory: %w", err)
 	}
 
 	var mdFiles []string
@@ -378,13 +263,12 @@ func collectFlatFileChunks(dir string) ([]graph.ChunkInput, []graph.ChunkWithTop
 
 	if len(mdFiles) == 0 {
 		fmt.Fprintf(os.Stderr, "No .md files found in %s\n", dir)
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	fmt.Fprintf(os.Stderr, "Found %d .md files\n", len(mdFiles))
 
-	var allChunks []graph.ChunkInput
-	var allChunksWithTopic []graph.ChunkWithTopic
+	var allChunks []chunkInput
 
 	for _, fileName := range mdFiles {
 		filePath := filepath.Join(dir, fileName)
@@ -394,32 +278,25 @@ func collectFlatFileChunks(dir string) ([]graph.ChunkInput, []graph.ChunkWithTop
 			continue
 		}
 
-		// Parse frontmatter for metadata
 		fm := parseFlatFrontmatter(string(content))
 		docID := workspace.SourceHash(fileName)
 
 		chunks := parseChunksFromMarkdown(string(content), docID)
 		for i, ch := range chunks {
 			chunkID := fmt.Sprintf("%s:chunk_%d", docID, i)
-			allChunks = append(allChunks, graph.ChunkInput{
+			allChunks = append(allChunks, chunkInput{
 				DocID:      docID,
 				ChunkIndex: i,
 				Content:    ch.Content,
 				Topic:      ch.Topic,
 			})
-			allChunksWithTopic = append(allChunksWithTopic, graph.ChunkWithTopic{
-				ID:        chunkID,
-				Topic:     ch.Topic,
-				Summary:   ch.Summary,
-				KeyPoints: ch.KeyPoints,
-				Content:   ch.Content,
-			})
+			_ = chunkID
 		}
 
-		_ = fm // metadata available if needed
+		_ = fm
 	}
 
-	return allChunks, allChunksWithTopic, nil
+	return allChunks, nil
 }
 
 func parseFlatFrontmatter(content string) map[string]interface{} {
@@ -520,7 +397,7 @@ func detectVectorSize(model string) int {
 	case strings.Contains(model, "text-embedding-ada"):
 		return 1536
 	default:
-		return 1024 // safe default
+		return 1024
 	}
 }
 
@@ -537,12 +414,8 @@ func init() {
 	indexCmd.Flags().StringVar(&indexQdrantURL, "qdrant-url", "", "Qdrant URL (default: http://localhost:6333)")
 	indexCmd.Flags().StringVar(&indexQdrantAPIKey, "qdrant-api-key", "", "Qdrant API key")
 	indexCmd.Flags().StringVar(&indexCollection, "collection", "media2rag", "Qdrant collection name")
-	indexCmd.Flags().StringVar(&indexGraphPath, "graph-path", "", "Path to save graph.json")
-	indexCmd.Flags().StringVar(&indexCommunitiesPath, "communities-path", "", "Path to save communities.json")
-	indexCmd.Flags().BoolVar(&indexIncremental, "incremental", false, "Only index new/changed documents")
-	indexCmd.Flags().IntVar(&indexConcurrency, "concurrency", 5, "Concurrent LLM requests")
 	indexCmd.Flags().StringVar(&indexBackend, "backend", "", "LLM backend")
-	indexCmd.Flags().StringVar(&indexModel, "model", "", "LLM model for extraction")
+	indexCmd.Flags().StringVar(&indexModel, "model", "", "LLM model")
 	indexCmd.Flags().StringVar(&indexEmbedModel, "embed-model", "", "Embedding model (defaults to --model)")
 	indexCmd.Flags().StringVar(&indexEmbedBackend, "embed-backend", "", "Embedding backend (defaults to --backend)")
 	rootCmd.AddCommand(indexCmd)

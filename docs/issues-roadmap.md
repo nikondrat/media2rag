@@ -27,7 +27,6 @@
 - Status: per-chunk cost/tokens/latency tracking, stage breakdown
 - Pricing: динамическая загрузка цен моделей с API
 - Progress: улучшенный ETA (per-file average вместо wall clock)
-- GraphRAG docs
 
 ---
 
@@ -156,17 +155,14 @@ extracted → preClean → splitText → processChunks (parallel)
 - [ ] Recursive directory support
 - [ ] Dry-run mode
 
-### Phase 2: RAG + GraphRAG (CLI команды)
+### Phase 2: RAG (CLI команды)
 - [x] Causal extraction pipeline stage
-- [ ] Qdrant restore from git
-- [ ] `media2rag rag <query>` — векторный поиск
-- [ ] `media2rag graphrag <query>` — обход графа
-- [ ] JSON output для AI агентов
+- [x] `media2rag index` — индексация в Qdrant
+- [x] `media2rag rag <query>` — векторный поиск
+- [x] JSON output для AI агентов
+
+> GraphRAG (`graphrag`, `graph_info`, `update`, `export`, `search` команды + Knowledge Graph) вынесен в ветку `experimental/graphrag`.
 
 ### Phase 3: AI Agent Integration
 - CLI как tool для Hermes и других агентов
 - JSON output format
-
-### Future: Memory (возможно)
-- User profile graph
-- Персонализация GraphRAG
