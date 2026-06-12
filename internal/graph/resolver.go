@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 
 	"media2rag/internal/llm"
@@ -37,39 +36,14 @@ func (r *EntityResolver) Resolve(ctx context.Context, nodes []*model.GraphNode) 
 		return nodes, nil
 	}
 
-	// Compute embeddings in batches for performance
-	batchSize := 100
-	var texts []string
-	var indices []int
-	for i, node := range nodes {
-		text := node.Name + " " + node.Description
-		texts = append(texts, text)
-		indices = append(indices, i)
-	}
-
-	for i := 0; i < len(texts); i += batchSize {
-		end := i + batchSize
-		if end > len(texts) {
-			end = len(texts)
-		}
-		batch := texts[i:end]
-		batchIdx := indices[i:end]
-		embeddings, err := r.embedClient.EmbedBatch(ctx, batch)
+	// Compute embeddings for all nodes
+	for _, node := range nodes {
+		embedding, err := r.embedClient.Embed(ctx, node.Name+" "+node.Description)
 		if err != nil {
-			// Fallback to sequential single-embed
-			for j, idx := range batchIdx {
-				emb, eErr := r.embedClient.Embed(ctx, batch[j])
-				if eErr == nil {
-					nodes[idx].Embedding = emb
-				}
-			}
+			// Embedding failed, continue without it
 			continue
 		}
-		for j, idx := range batchIdx {
-			if j < len(embeddings) {
-				nodes[idx].Embedding = embeddings[j]
-			}
-		}
+		node.Embedding = embedding
 	}
 
 	// Group nodes by type for comparison (only compare same-type nodes)
@@ -81,19 +55,8 @@ func (r *EntityResolver) Resolve(ctx context.Context, nodes []*model.GraphNode) 
 	merged := make([]*model.GraphNode, 0, len(nodes))
 	mergedIDs := make(map[string]bool)
 
-	totalTypes := len(byType)
-	typeIdx := 0
 	for _, typeNodes := range byType {
-		typeIdx++
-		totalPairs := len(typeNodes) * (len(typeNodes) - 1) / 2
-		if totalPairs < 0 {
-			totalPairs = 0
-		}
 		for i := 0; i < len(typeNodes); i++ {
-			if i%200 == 0 && len(typeNodes) > 500 {
-				fmt.Fprintf(os.Stderr, "\r  Dedup %s: %d/%d nodes (%d pairs)...  ", typeNodes[0].Type, i, len(typeNodes), totalPairs)
-			}
-
 			if mergedIDs[typeNodes[i].ID] {
 				continue
 			}
@@ -127,9 +90,6 @@ func (r *EntityResolver) Resolve(ctx context.Context, nodes []*model.GraphNode) 
 			if !mergedIDs[current.ID] {
 				merged = append(merged, current)
 			}
-		}
-		if totalPairs > 0 {
-			fmt.Fprintf(os.Stderr, "\r  Dedup %s: %d/%d done (%d pairs, %d nodes → %d)   \n", typeNodes[0].Type, typeIdx, totalTypes, totalPairs, len(typeNodes), len(merged))
 		}
 	}
 

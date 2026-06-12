@@ -1,14 +1,11 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -33,7 +30,6 @@ var (
 	indexModel           string
 	indexEmbedModel      string
 	indexEmbedBackend    string
-	indexClusterMethod   string
 )
 
 var indexCmd = &cobra.Command{
@@ -136,53 +132,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "Collected %d chunks\n", len(allChunks))
 
-	// --- Incremental: filter unchanged and already-processed chunks ---
-	manifestPath := filepath.Join(filepath.Dir(indexGraphPath), "chunk_manifest.json")
-	oldHashes := loadChunkHashes(manifestPath)
-	processedChunks := loadProcessedChunks(manifestPath)
-	newHashes := make(map[string]string)
-	for _, ch := range allChunks {
-		chunkID := fmt.Sprintf("%s:chunk_%d", ch.DocID, ch.ChunkIndex)
-		newHashes[chunkID] = chunkHash(ch.Content)
-	}
-
-	if indexIncremental && len(oldHashes) > 0 {
-		var changed []graph.ChunkInput
-		var changedWithTopic []graph.ChunkWithTopic
-		var unchanged, alreadyProcessed int
-
-		for _, ch := range allChunks {
-			chunkID := fmt.Sprintf("%s:chunk_%d", ch.DocID, ch.ChunkIndex)
-			if processedChunks[chunkID] {
-				alreadyProcessed++
-				continue
-			}
-			if oldHashes[chunkID] == newHashes[chunkID] {
-				unchanged++
-				continue
-			}
-			changed = append(changed, ch)
-			for _, ct := range allChunksWithTopic {
-				if ct.ID == chunkID {
-					changedWithTopic = append(changedWithTopic, ct)
-					break
-				}
-			}
-		}
-
-		if unchanged > 0 || alreadyProcessed > 0 {
-			fmt.Fprintf(os.Stderr, "Incremental: %d unchanged, %d already processed, %d to process\n", unchanged, alreadyProcessed, len(changed))
-		}
-
-		allChunks = changed
-		allChunksWithTopic = changedWithTopic
-
-		if len(allChunks) == 0 {
-			fmt.Fprintf(os.Stderr, "No changes detected. Graph is up to date.\n")
-			return nil
-		}
-	}
-
 	// --- Qdrant indexing ---
 	qdrantURL := indexQdrantURL
 	if qdrantURL == "" {
@@ -236,102 +185,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Graph extraction ---
-	checkpointDir := filepath.Join(filepath.Dir(indexGraphPath), "extractions")
+	fmt.Fprintf(os.Stderr, "Extracting entities and relations from %d chunks...\n", len(allChunks))
 
-	// Pre-filter chunks that already have checkpoints
-	checkpointResults, _ := graph.LoadExtractionCheckpoints(checkpointDir)
-	var filtered []graph.ChunkInput
-	var filteredWithTopic []graph.ChunkWithTopic
-	for i, ch := range allChunks {
-		chunkID := fmt.Sprintf("%s:chunk_%d", ch.DocID, ch.ChunkIndex)
-		if checkpointResults[chunkID] == nil {
-			filtered = append(filtered, ch)
-			filteredWithTopic = append(filteredWithTopic, allChunksWithTopic[i])
-		}
-	}
-	skipCount := len(allChunks) - len(filtered)
-	allChunks = filtered
-	allChunksWithTopic = filteredWithTopic
+	extractor := graph.NewEntityExtractor(extractClient, indexConcurrency, modelName)
+	results := extractor.ExtractBatch(ctx, allChunks, nil)
 
-	totalChunks := len(allChunks)
-	if skipCount > 0 {
-		fmt.Fprintf(os.Stderr, "Found %d existing checkpoints, skipping...\n", skipCount)
-	}
-	fmt.Fprintf(os.Stderr, "Extracting entities and relations from %d chunks (%d concurrent)...\n", totalChunks, indexConcurrency)
-
-	// Track processed chunks for checkpointing and progress
-	var processedMu sync.Mutex
-	processedIDs := make([]string, 0)
-	processedSet := make(map[string]bool)
-	// Start with already-processed IDs from manifest
-	for id := range processedChunks {
-		processedIDs = append(processedIDs, id)
-		processedSet[id] = true
-	}
-
-	startTime := time.Now()
-	newDone := 0
-
-	extractor := graph.NewEntityExtractorWithCheckpoint(extractClient, indexConcurrency, modelName, checkpointDir)
-	results := extractor.ExtractBatchWithCheckpoint(ctx, allChunks, nil, func(ids []string) {
-		processedMu.Lock()
-		for _, id := range ids {
-			if !processedSet[id] {
-				processedIDs = append(processedIDs, id)
-				processedSet[id] = true
-			}
-		}
-		newDone = len(processedIDs) - len(processedChunks)
-		if newDone < 0 {
-			newDone = 0
-		}
-		elapsed := time.Since(startTime)
-		remaining := totalChunks - newDone
-		if newDone > 0 {
-			rate := float64(newDone) / elapsed.Seconds()
-			eta := time.Duration(float64(remaining)/rate) * time.Second
-			fmt.Fprintf(os.Stderr, "\r  Progress: %d/%d chunks (%.1f chunks/s, ETA: %s)", newDone, totalChunks, rate, eta.Round(time.Second))
-		}
-		saveChunkHashes(manifestPath, filterHashes(newHashes, processedIDs), processedIDs)
-		processedMu.Unlock()
-	})
-	fmt.Fprintf(os.Stderr, "\n")
-
-	// Final manifest save
-	processedMu.Lock()
-	for id := range processedChunks {
-		if !processedSet[id] {
-			processedIDs = append(processedIDs, id)
-		}
-	}
-	processedIDs = removeDups(processedIDs)
-	saveChunkHashes(manifestPath, filterHashes(newHashes, processedIDs), processedIDs)
-	processedMu.Unlock()
-
-	// Load existing graph for incremental merge
-	var graphData *model.KnowledgeGraph
-	if indexIncremental && graph.GraphExists(indexGraphPath) {
-		fmt.Fprintf(os.Stderr, "Loading existing graph for merge...\n")
-		graphData, err = graph.LoadGraph(indexGraphPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not load existing graph: %v, starting fresh\n", err)
-			graphData = model.NewKnowledgeGraph()
-		}
-	} else {
-		graphData = model.NewKnowledgeGraph()
-	}
-
-	// Merge checkpoint results (from previous partial runs)
-	for _, cp := range checkpointResults {
-		for _, node := range cp.Nodes {
-			graphData.AddNode(node)
-		}
-		for _, edge := range cp.Edges {
-			graphData.AddEdge(edge)
-		}
-	}
-
-	// Merge new results
+	graphData := model.NewKnowledgeGraph()
 	for _, result := range results {
 		if result.Err != nil {
 			continue
@@ -370,15 +229,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
-		for _, cp := range checkpointResults {
-			for _, edge := range cp.Edges {
-				if _, fromOk := graphData.GetNodeByID(edge.From); fromOk {
-					if _, toOk := graphData.GetNodeByID(edge.To); toOk {
-						graphData.AddEdge(edge)
-					}
-				}
-			}
-		}
 	}
 
 	graphData.BuildIndexes()
@@ -396,50 +246,15 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Saved graph to %s\n", indexGraphPath)
 
 	// --- Community detection ---
-	fmt.Fprintf(os.Stderr, "Detecting communities (method: %s)...\n", indexClusterMethod)
-
-	var communities []*model.Community
-	if indexIncremental && graph.GraphExists(indexCommunitiesPath) {
-		communities, err = graph.LoadCommunities(indexCommunitiesPath)
-		if err != nil {
-			communities = nil
-		}
-	}
+	fmt.Fprintf(os.Stderr, "Detecting communities...\n")
 
 	detector := graph.NewCommunityDetector(extractClient, modelName)
+	communities := detector.DetectGroups(allChunksWithTopic)
+	fmt.Fprintf(os.Stderr, "Found %d communities\n", len(communities))
 
-	if indexClusterMethod == "leiden" {
-		// Leiden clustering based on graph structure
-		leiden := graph.NewLeidenCluster(1.0, 10)
-		newCommunities := leiden.Detect(graphData)
-		communities = mergeCommunities(communities, newCommunities)
-	} else {
-		// Topic-based clustering (default)
-		newCommunities := detector.DetectGroups(allChunksWithTopic)
-		communities = mergeCommunities(communities, newCommunities)
-	}
-	fmt.Fprintf(os.Stderr, "Total communities: %d\n", len(communities))
-
-	// Only generate summaries for new communities in incremental mode
-	if !indexIncremental {
-		fmt.Fprintf(os.Stderr, "Generating community summaries...\n")
-		if err := detector.GenerateSummaries(ctx, communities, allChunksWithTopic); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: community summary generation: %v\n", err)
-		}
-	} else {
-		// Generate summaries only for communities without them
-		var needSummary []*model.Community
-		for _, c := range communities {
-			if c.Summary == "" {
-				needSummary = append(needSummary, c)
-			}
-		}
-		if len(needSummary) > 0 {
-			fmt.Fprintf(os.Stderr, "Generating summaries for %d new communities...\n", len(needSummary))
-			if err := detector.GenerateSummaries(ctx, needSummary, allChunksWithTopic); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: community summary generation: %v\n", err)
-			}
-		}
+	fmt.Fprintf(os.Stderr, "Generating community summaries...\n")
+	if err := detector.GenerateSummaries(ctx, communities, allChunksWithTopic); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: community summary generation: %v\n", err)
 	}
 
 	if err := detector.GenerateDomainHierarchy(ctx, communities); err != nil {
@@ -452,11 +267,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save communities: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Saved communities to %s\n", indexCommunitiesPath)
-
-	// Clean up per-chunk checkpoints (all done, no rollback needed)
-	if err := os.RemoveAll(checkpointDir); err == nil {
-		fmt.Fprintf(os.Stderr, "Cleaned up extraction checkpoints\n")
-	}
 
 	fmt.Fprintf(os.Stderr, "\n✓ Indexing complete!\n")
 	fmt.Fprintf(os.Stderr, "  Graph: %s\n", indexGraphPath)
@@ -526,11 +336,10 @@ func collectWorkspaceChunks(workspaceDir string) ([]graph.ChunkInput, []graph.Ch
 		chunks := parseChunksFromMarkdown(string(content), doc.Hash)
 		for i, ch := range chunks {
 			chunkID := fmt.Sprintf("%s:chunk_%d", doc.Hash, i)
-			chunkText := ch.ChunkText()
 			allChunks = append(allChunks, graph.ChunkInput{
 				DocID:      doc.Hash,
 				ChunkIndex: i,
-				Content:    chunkText,
+				Content:    ch.Content,
 				Topic:      ch.Topic,
 			})
 			allChunksWithTopic = append(allChunksWithTopic, graph.ChunkWithTopic{
@@ -538,7 +347,7 @@ func collectWorkspaceChunks(workspaceDir string) ([]graph.ChunkInput, []graph.Ch
 				Topic:     ch.Topic,
 				Summary:   ch.Summary,
 				KeyPoints: ch.KeyPoints,
-				Content:   chunkText,
+				Content:   ch.Content,
 			})
 		}
 	}
@@ -592,11 +401,10 @@ func collectFlatFileChunks(dir string) ([]graph.ChunkInput, []graph.ChunkWithTop
 		chunks := parseChunksFromMarkdown(string(content), docID)
 		for i, ch := range chunks {
 			chunkID := fmt.Sprintf("%s:chunk_%d", docID, i)
-			chunkText := ch.ChunkText()
 			allChunks = append(allChunks, graph.ChunkInput{
 				DocID:      docID,
 				ChunkIndex: i,
-				Content:    chunkText,
+				Content:    ch.Content,
 				Topic:      ch.Topic,
 			})
 			allChunksWithTopic = append(allChunksWithTopic, graph.ChunkWithTopic{
@@ -604,7 +412,7 @@ func collectFlatFileChunks(dir string) ([]graph.ChunkInput, []graph.ChunkWithTop
 				Topic:     ch.Topic,
 				Summary:   ch.Summary,
 				KeyPoints: ch.KeyPoints,
-				Content:   chunkText,
+				Content:   ch.Content,
 			})
 		}
 
@@ -647,7 +455,7 @@ func parseChunksFromMarkdown(content, docHash string) []parsedChunk {
 
 	for _, line := range lines {
 		if strings.HasPrefix(line, "## chunk_") {
-			if currentChunk != nil && hasChunkData(currentChunk) {
+			if currentChunk != nil && currentChunk.Content != "" {
 				chunks = append(chunks, *currentChunk)
 			}
 			currentChunk = &parsedChunk{}
@@ -682,7 +490,7 @@ func parseChunksFromMarkdown(content, docHash string) []parsedChunk {
 		}
 	}
 
-	if currentChunk != nil && hasChunkData(currentChunk) {
+	if currentChunk != nil && currentChunk.Content != "" {
 		chunks = append(chunks, *currentChunk)
 	}
 
@@ -695,34 +503,6 @@ func parseChunksFromMarkdown(content, docHash string) []parsedChunk {
 	}
 
 	return chunks
-}
-
-func hasChunkData(ch *parsedChunk) bool {
-	return ch.Summary != "" || ch.Content != "" || len(ch.KeyPoints) > 0
-}
-
-// ChunkText returns structured text for embedding/extraction
-func (ch *parsedChunk) ChunkText() string {
-	var sb strings.Builder
-	if ch.Topic != "" {
-		sb.WriteString("Topic: ")
-		sb.WriteString(ch.Topic)
-		sb.WriteString("\n")
-	}
-	if ch.Summary != "" {
-		sb.WriteString("Summary: ")
-		sb.WriteString(ch.Summary)
-		sb.WriteString("\n")
-	}
-	if len(ch.KeyPoints) > 0 {
-		sb.WriteString("Key points: ")
-		sb.WriteString(strings.Join(ch.KeyPoints, ", "))
-		sb.WriteString("\n")
-	}
-	if ch.Content != "" {
-		sb.WriteString(ch.Content)
-	}
-	return strings.TrimSpace(sb.String())
 }
 
 func detectVectorSize(model string) int {
@@ -753,122 +533,17 @@ func stringToUint64(s string) uint64 {
 	return binary.BigEndian.Uint64(b[:])
 }
 
-func chunkHash(content string) string {
-	h := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", h[:8])
-}
-
-type chunkManifest struct {
-	Hashes    map[string]string `json:"hashes"`
-	Processed []string          `json:"processed,omitempty"`
-	Updated   string            `json:"updated"`
-}
-
-func loadChunkHashes(path string) map[string]string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return make(map[string]string)
-	}
-	var m chunkManifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return make(map[string]string)
-	}
-	return m.Hashes
-}
-
-func loadProcessedChunks(path string) map[string]bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return make(map[string]bool)
-	}
-	var m chunkManifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return make(map[string]bool)
-	}
-	processed := make(map[string]bool)
-	for _, id := range m.Processed {
-		processed[id] = true
-	}
-	return processed
-}
-
-func filterHashes(all map[string]string, keepIDs []string) map[string]string {
-	filtered := make(map[string]string, len(keepIDs))
-	keep := make(map[string]bool, len(keepIDs))
-	for _, id := range keepIDs {
-		keep[id] = true
-	}
-	for id, hash := range all {
-		if keep[id] {
-			filtered[id] = hash
-		}
-	}
-	return filtered
-}
-
-func removeDups(ids []string) []string {
-	seen := make(map[string]bool, len(ids))
-	result := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
-func saveChunkHashes(path string, hashes map[string]string, processed []string) {
-	m := chunkManifest{
-		Hashes:    hashes,
-		Processed: processed,
-		Updated:   time.Now().Format(time.RFC3339),
-	}
-	data, _ := json.MarshalIndent(m, "", "  ")
-	os.MkdirAll(filepath.Dir(path), 0755)
-	os.WriteFile(path, data, 0644)
-}
-
-func mergeCommunities(existing, new []*model.Community) []*model.Community {
-	existingMap := make(map[string]*model.Community)
-	for _, c := range existing {
-		existingMap[c.Topic] = c
-	}
-
-	result := make([]*model.Community, len(existing))
-	copy(result, existing)
-
-	for _, c := range new {
-		if existing, ok := existingMap[c.Topic]; ok {
-			existingIDs := make(map[string]bool)
-			for _, id := range existing.MemberChunkIDs {
-				existingIDs[id] = true
-			}
-			for _, id := range c.MemberChunkIDs {
-				if !existingIDs[id] {
-					existing.MemberChunkIDs = append(existing.MemberChunkIDs, id)
-				}
-			}
-		} else {
-			result = append(result, c)
-		}
-	}
-
-	return result
-}
-
 func init() {
 	indexCmd.Flags().StringVar(&indexQdrantURL, "qdrant-url", "", "Qdrant URL (default: http://localhost:6333)")
 	indexCmd.Flags().StringVar(&indexQdrantAPIKey, "qdrant-api-key", "", "Qdrant API key")
 	indexCmd.Flags().StringVar(&indexCollection, "collection", "media2rag", "Qdrant collection name")
 	indexCmd.Flags().StringVar(&indexGraphPath, "graph-path", "", "Path to save graph.json")
 	indexCmd.Flags().StringVar(&indexCommunitiesPath, "communities-path", "", "Path to save communities.json")
-	indexCmd.Flags().BoolVar(&indexIncremental, "incremental", true, "Only index new/changed documents (default: true)")
+	indexCmd.Flags().BoolVar(&indexIncremental, "incremental", false, "Only index new/changed documents")
 	indexCmd.Flags().IntVar(&indexConcurrency, "concurrency", 5, "Concurrent LLM requests")
 	indexCmd.Flags().StringVar(&indexBackend, "backend", "", "LLM backend")
 	indexCmd.Flags().StringVar(&indexModel, "model", "", "LLM model for extraction")
 	indexCmd.Flags().StringVar(&indexEmbedModel, "embed-model", "", "Embedding model (defaults to --model)")
 	indexCmd.Flags().StringVar(&indexEmbedBackend, "embed-backend", "", "Embedding backend (defaults to --backend)")
-	indexCmd.Flags().StringVar(&indexClusterMethod, "cluster", "leiden", "Clustering method: leiden (default), topic")
 	rootCmd.AddCommand(indexCmd)
 }

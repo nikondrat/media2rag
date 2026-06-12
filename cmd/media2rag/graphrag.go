@@ -307,14 +307,9 @@ func findSeedEntities(entities []string, kg *model.KnowledgeGraph) []*model.Grap
 			}
 		}
 
-		// Case-insensitive match on name and aliases
+		// Fuzzy match (check aliases)
 		for _, node := range kg.Nodes {
 			if seen[node.ID] {
-				continue
-			}
-			if strings.EqualFold(node.Name, entity) {
-				seeds = append(seeds, node)
-				seen[node.ID] = true
 				continue
 			}
 			for _, alias := range node.Aliases {
