@@ -93,14 +93,25 @@ func (c *Client) InitCollection(ctx context.Context, vectorSize int) error {
 	return c.doRequest(ctx, http.MethodPut, fmt.Sprintf("/collections/%s", c.collection), body, nil)
 }
 
-// Upsert inserts or updates points in the collection
+// Upsert inserts or updates points in the collection, with automatic batching
 func (c *Client) Upsert(ctx context.Context, points []Point) error {
 	if len(points) == 0 {
 		return nil
 	}
 
-	body := UpsertRequest{Points: points}
-	return c.doRequest(ctx, http.MethodPut, fmt.Sprintf("/collections/%s/points?wait=true", c.collection), body, nil)
+	batchSize := 1000
+	for i := 0; i < len(points); i += batchSize {
+		end := i + batchSize
+		if end > len(points) {
+			end = len(points)
+		}
+		batch := points[i:end]
+		body := UpsertRequest{Points: batch}
+		if err := c.doRequest(ctx, http.MethodPut, fmt.Sprintf("/collections/%s/points?wait=true", c.collection), body, nil); err != nil {
+			return fmt.Errorf("batch %d-%d: %w", i, end, err)
+		}
+	}
+	return nil
 }
 
 // Search performs a dense vector search

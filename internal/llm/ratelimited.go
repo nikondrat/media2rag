@@ -69,6 +69,14 @@ func (c *RateLimitedClient) Embed(ctx context.Context, text string) ([]float32, 
 	return c.inner.Embed(ctx, text)
 }
 
+func (c *RateLimitedClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if err := c.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer func() { <-c.sem }()
+	return c.inner.EmbedBatch(ctx, texts)
+}
+
 func (c *RateLimitedClient) ChatAndParse(ctx context.Context, req model.ChatRequest) ([]model.TypedBlock, error) {
 	resp, err := c.Chat(ctx, req)
 	if err != nil {

@@ -116,6 +116,7 @@ func (m *mockLLMClient) ChatAndParse(ctx context.Context, req model.ChatRequest)
 func (m *mockLLMClient) StreamChat(ctx context.Context, req model.ChatRequest) (<-chan model.StreamDelta, error) { return nil, nil }
 func (m *mockLLMClient) StreamAndParse(ctx context.Context, req model.ChatRequest) (<-chan model.StreamDelta, chan []model.TypedBlock, error) { return nil, nil, nil }
 func (m *mockLLMClient) Embed(ctx context.Context, text string) ([]float32, error) { return nil, nil }
+func (m *mockLLMClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) { return nil, nil }
 
 func TestChatAndParse_Mock(t *testing.T) {
 	mock := &mockLLMClient{content: "> memory\nuser=nikita\n<"}

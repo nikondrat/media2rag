@@ -154,6 +154,10 @@ func (c *InstrumentedClient) Embed(ctx context.Context, text string) ([]float32,
 	return c.inner.Embed(ctx, text)
 }
 
+func (c *InstrumentedClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	return c.inner.EmbedBatch(ctx, texts)
+}
+
 func (c *InstrumentedClient) ChatAndParse(ctx context.Context, req model.ChatRequest) ([]model.TypedBlock, error) {
 	return c.inner.ChatAndParse(ctx, req)
 }

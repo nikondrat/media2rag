@@ -98,8 +98,8 @@ type ollamaStreamResponse struct {
 }
 
 type ollamaEmbedRequest struct {
-	Model  string `json:"model"`
-	Input  string `json:"input"`
+	Model  string      `json:"model"`
+	Input  interface{} `json:"input"`
 }
 
 type ollamaEmbedResponse struct {
@@ -278,9 +278,24 @@ func (c *OllamaClient) StreamAndParse(ctx context.Context, req model.ChatRequest
 }
 
 func (c *OllamaClient) Embed(ctx context.Context, text string) ([]float32, error) {
+	embeddings, err := c.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(embeddings) == 0 {
+		return nil, fmt.Errorf("no embedding returned")
+	}
+	return embeddings[0], nil
+}
+
+func (c *OllamaClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+
 	body := ollamaEmbedRequest{
 		Model: c.model,
-		Input: text,
+		Input: texts,
 	}
 
 	var buf bytes.Buffer
@@ -313,21 +328,12 @@ func (c *OllamaClient) Embed(ctx context.Context, text string) ([]float32, error
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	var embedResp struct {
+	var batchResp struct {
 		Embeddings [][]float32 `json:"embeddings"`
 	}
-
-	if err := json.Unmarshal(bodyBytes, &embedResp); err != nil {
-		var single ollamaEmbedResponse
-		if err2 := json.Unmarshal(bodyBytes, &single); err2 != nil {
-			return nil, fmt.Errorf("decode response: %w", err)
-		}
-		return single.Embedding, nil
+	if err := json.Unmarshal(bodyBytes, &batchResp); err != nil {
+		return nil, fmt.Errorf("decode batch response: %w", err)
 	}
 
-	if len(embedResp.Embeddings) > 0 {
-		return embedResp.Embeddings[0], nil
-	}
-
-	return nil, fmt.Errorf("no embedding returned")
+	return batchResp.Embeddings, nil
 }

@@ -94,6 +94,17 @@ func (f *fallbackClient) Embed(ctx context.Context, text string) ([]float32, err
 	return resp, nil
 }
 
+func (f *fallbackClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	resp, err := f.primary.EmbedBatch(ctx, texts)
+	if err != nil {
+		if errors.Is(err, model.ErrLLMUnavailable) {
+			return f.fallback.EmbedBatch(ctx, texts)
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
 func NewClientFromChain(ctx context.Context, models []string, backend, ollamaURL, openRouterURL, openRouterKey string, timeout time.Duration) (LLMClient, error) {
 	if len(models) == 0 {
 		return nil, fmt.Errorf("empty model chain")
@@ -181,6 +192,10 @@ func (c *chainClient) StreamAndParse(ctx context.Context, req model.ChatRequest)
 
 func (c *chainClient) Embed(ctx context.Context, text string) ([]float32, error) {
 	return c.clients[0].Embed(ctx, text)
+}
+
+func (c *chainClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	return c.clients[0].EmbedBatch(ctx, texts)
 }
 
 func isRetryable(err error) bool {

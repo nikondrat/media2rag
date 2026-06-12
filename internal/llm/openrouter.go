@@ -287,6 +287,33 @@ func (c *OpenRouterClient) StreamAndParse(ctx context.Context, req model.ChatReq
 }
 
 func (c *OpenRouterClient) Embed(ctx context.Context, text string) ([]float32, error) {
+	embeddings, err := c.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(embeddings) == 0 {
+		return nil, fmt.Errorf("no embedding returned")
+	}
+	return embeddings[0], nil
+}
+
+func (c *OpenRouterClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	// OpenRouter doesn't support batch embedding, do sequentially
+	result := make([][]float32, len(texts))
+	for i, text := range texts {
+		emb, err := c.embedOne(ctx, text)
+		if err != nil {
+			return nil, fmt.Errorf("embed %d: %w", i, err)
+		}
+		result[i] = emb
+	}
+	return result, nil
+}
+
+func (c *OpenRouterClient) embedOne(ctx context.Context, text string) ([]float32, error) {
 	// Try /v1/embeddings endpoint (works with LM Studio, Ollama-compatible servers)
 	type embedInput struct {
 		Model string   `json:"model"`
