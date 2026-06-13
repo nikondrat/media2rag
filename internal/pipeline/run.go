@@ -31,29 +31,47 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 	emitter.Emit(model.Event{Type: EventPipelineStart, Data: map[string]int{"text_length": len(ec.Content)}})
 	p.saveIntermediate("raw.md", ec.Content)
 
+	p.trackStage("extract", func() {
+		p.saveIntermediate("raw.md", ec.Content)
+	})
+
 	cleaned := ec.Content
-	if ec.DocType == "transcript" {
-		var err error
-		cleaned, err = p.preClean(ctx, ec.Content, emitter)
-		if err != nil {
-			p.setFailed(err)
-			return nil, fmt.Errorf("pre-clean: %w", err)
+	p.trackStage("clean", func() {
+		if ec.DocType == "transcript" {
+			var err error
+			cleaned, err = p.preClean(ctx, ec.Content, emitter)
+			if err != nil {
+				p.setFailed(err)
+				return
+			}
+			p.saveIntermediate("cleaned.md", cleaned)
+			emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
+		} else {
+			p.saveIntermediate("cleaned.md", cleaned)
+			emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
 		}
-		p.saveIntermediate("cleaned.md", cleaned)
-		emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
-	} else {
-		p.saveIntermediate("cleaned.md", cleaned)
-		emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
+	})
+
+	if p.status != nil && p.status.Stage == StageFailed {
+		return nil, fmt.Errorf("pipeline failed during clean stage")
 	}
 
 	emitter.Emit(model.Event{Type: EventSplitting})
-	rawChunks, err := p.splitText(cleaned)
-	if err != nil {
-		p.setFailed(err)
-		return nil, fmt.Errorf("splitter: %w", err)
+	var rawChunks []string
+	p.trackStage("split", func() {
+		var err error
+		rawChunks, err = p.splitText(cleaned)
+		if err != nil {
+			p.setFailed(err)
+			return
+		}
+		p.saveChunks(rawChunks)
+		emitter.Emit(model.Event{Type: EventSplitDone, Data: map[string]int{"chunks": len(rawChunks)}})
+	})
+
+	if p.status != nil && p.status.Stage == StageFailed {
+		return nil, fmt.Errorf("pipeline failed during split stage")
 	}
-	p.saveChunks(rawChunks)
-	emitter.Emit(model.Event{Type: EventSplitDone, Data: map[string]int{"chunks": len(rawChunks)}})
 
 	if p.status != nil {
 		p.status.SetChunks(len(rawChunks))
@@ -76,6 +94,12 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 	}
 	emitter.Emit(model.Event{Type: EventContextEnrichDone})
 
+	var imageDescs []ImageDescription
+	if len(ec.Images) > 0 {
+		visionProc := NewVisionProcessor(p.llmClient, p.config.MaxConcurrency)
+		imageDescs, _ = visionProc.Process(ctx, ec.Images, emitter)
+	}
+
 	emitter.Emit(model.Event{Type: EventAssembling})
 	doc := assemble(results, assembleOpts{
 		source:          p.source,
@@ -87,13 +111,14 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 		causalChains:    causalChains,
 		preconditions:   preconditions,
 		counterfactuals: counterfactuals,
+		images:          imageDescs,
 	})
 	doc.CleanedText = cleaned
 	doc.Metadata.CoreThesis = holistic.coreThesis
 
 	if p.outputDir != "" {
 		_ = os.WriteFile(filepath.Join(p.outputDir, "output", "final.md"), []byte(doc.Markdown), 0644)
-		p.status.SetStage(StageDone)
+		p.status.SetCompleted()
 	}
 
 	emitter.Emit(model.Event{Type: EventPipelineCompleted, Data: map[string]interface{}{
@@ -103,6 +128,16 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 	}})
 
 	return doc, nil
+}
+
+func (p *Pipeline) trackStage(name string, fn func()) {
+	if p.status != nil {
+		p.status.StageStarted(name)
+	}
+	fn()
+	if p.status != nil {
+		p.status.StageCompleted(name)
+	}
 }
 
 func (p *Pipeline) RunString(ctx context.Context, rawText string, emitter events.EventEmitter) (*model.RAGDocument, error) {

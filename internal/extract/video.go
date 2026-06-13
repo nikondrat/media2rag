@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"media2rag/internal/model"
 )
 
 type VideoExtractor struct{}
@@ -90,4 +92,8 @@ func transcribeAudio(ctx context.Context, audioPath, outputDir string) (string, 
 	}
 
 	return string(data), nil
+}
+
+func (v *VideoExtractor) ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error) {
+	return nil, nil
 }

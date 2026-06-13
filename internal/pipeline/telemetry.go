@@ -75,6 +75,8 @@ func (r *StatusRecorder) Record(t model.LLMTelemetry) {
 	r.status.TotalCost += t.Cost
 	r.status.TotalTokensIn += t.PromptTokens
 	r.status.TotalTokensOut += t.CompletionTokens
+	r.status.TotalCharsIn += t.PromptChars
+	r.status.TotalCharsOut += t.CompletionChars
 
 	if t.Stage != "" {
 		if r.status.StageBreakdown == nil {

@@ -83,6 +83,10 @@ func (p *Pipeline) processChunks(ctx context.Context, chunks []string, emitter e
 		ProcessFn: func(ctx context.Context, job chunkJob) error {
 			emitter.Emit(model.Event{Type: EventProcessingChunk, Data: map[string]int{"chunk": job.index + 1, "total": total}})
 
+			if p.status != nil {
+				p.status.ChunkStarted(job.index, "process")
+			}
+
 			r, err := p.processSingle(ctx, job.text, job.index, emitter)
 			if err != nil {
 				if p.status != nil {

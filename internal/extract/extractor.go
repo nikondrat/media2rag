@@ -3,12 +3,15 @@ package extract
 import (
 	"context"
 	"errors"
+
+	"media2rag/internal/model"
 )
 
 type Extractor interface {
 	Detect(path string) bool
 	Extract(ctx context.Context, path string) (string, error)
 	ContentType() string
+	ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error)
 }
 
 const (

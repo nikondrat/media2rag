@@ -5,8 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
+
+	"media2rag/internal/model"
 )
 
 type EPUBExtractor struct{}
@@ -160,4 +163,56 @@ func extractTextFromHTML(html string) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (e *EPUBExtractor) ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error) {
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, fmt.Errorf("open epub: %w", err)
+	}
+	defer r.Close()
+
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return nil, fmt.Errorf("create images dir: %w", err)
+	}
+
+	var images []model.ExtractedImage
+	for _, f := range r.File {
+		if ctx.Err() != nil {
+			return images, ctx.Err()
+		}
+
+		name := strings.ToLower(f.Name)
+		ext := filepath.Ext(name)
+		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".gif" && ext != ".svg" {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+
+		outPath := filepath.Join(outDir, filepath.Base(f.Name))
+		outFile, err := os.Create(outPath)
+		if err != nil {
+			rc.Close()
+			continue
+		}
+
+		if _, err := io.Copy(outFile, rc); err != nil {
+			rc.Close()
+			outFile.Close()
+			continue
+		}
+		rc.Close()
+		outFile.Close()
+
+		images = append(images, model.ExtractedImage{
+			Path:    outPath,
+			AltText: fmt.Sprintf("Image from EPUB: %s", filepath.Base(f.Name)),
+		})
+	}
+
+	return images, nil
 }

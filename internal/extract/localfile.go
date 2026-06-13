@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"media2rag/internal/model"
 )
 
 type LocalFileExtractor struct{}
@@ -77,4 +79,8 @@ func ParseFrontmatter(content string) map[string]string {
 		meta[key] = val
 	}
 	return meta
+}
+
+func (l *LocalFileExtractor) ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error) {
+	return nil, nil
 }

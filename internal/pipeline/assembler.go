@@ -20,6 +20,7 @@ type assembleOpts struct {
 	causalChains    []model.CausalLink
 	preconditions   []string
 	counterfactuals []string
+	images          []ImageDescription
 }
 
 type AssemblyInput struct {
@@ -30,6 +31,7 @@ type AssemblyInput struct {
 	SourceHash       string
 	SourceType       string
 	Frontmatter      map[string]interface{}
+	Images           []ImageDescription
 }
 
 func assemble(results []ChunkResult, opts assembleOpts) *model.RAGDocument {
@@ -52,6 +54,7 @@ func assemble(results []ChunkResult, opts assembleOpts) *model.RAGDocument {
 		SourcePath: opts.source,
 		SourceType: opts.docType,
 		Frontmatter: fm,
+		Images:     opts.images,
 	}
 
 	title := CollectTitle(input)
@@ -205,6 +208,17 @@ func assembleOutput(input *AssemblyInput) string {
 	if input.HolisticAnalysis != "" {
 		b.WriteString("\n")
 		b.WriteString(input.HolisticAnalysis)
+	}
+
+	if len(input.Images) > 0 {
+		b.WriteString("\n## Images\n\n")
+		for _, img := range input.Images {
+			relPath := img.Image.Path
+			if idx := strings.LastIndex(relPath, "/"); idx >= 0 {
+				relPath = "images/" + relPath[idx+1:]
+			}
+			b.WriteString(fmt.Sprintf("![%s](%s)\n\n", img.Description, relPath))
+		}
 	}
 
 	return b.String()

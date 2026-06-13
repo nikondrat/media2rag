@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"media2rag/internal/model"
 )
 
 type URLExtractor struct{}
@@ -111,4 +113,8 @@ func isNotFound(err error) bool {
 		return exitErr.ExitCode() == 127
 	}
 	return false
+}
+
+func (u *URLExtractor) ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error) {
+	return nil, nil
 }

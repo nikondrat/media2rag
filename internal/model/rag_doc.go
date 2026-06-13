@@ -5,6 +5,12 @@ type RAGDocument struct {
 	CleanedText   string           `json:"cleaned_text,omitempty"`
 	Metadata      DocumentMetadata `json:"metadata"`
 	Chunks        []Chunk          `json:"chunks,omitempty"`
+	Images        []ImageInfo      `json:"images,omitempty"`
+}
+
+type ImageInfo struct {
+	Path        string `json:"path"`
+	Description string `json:"description"`
 }
 
 type DocumentMetadata struct {

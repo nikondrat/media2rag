@@ -75,8 +75,9 @@ type ollamaChatRequest struct {
 }
 
 type ollamaMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string   `json:"role"`
+	Content string   `json:"content"`
+	Images  []string `json:"images,omitempty"`
 }
 
 type ollamaChatResponse struct {
@@ -110,6 +111,15 @@ func (c *OllamaClient) Chat(ctx context.Context, req model.ChatRequest) (*model.
 	messages := make([]ollamaMessage, len(req.Messages))
 	for i, m := range req.Messages {
 		messages[i] = ollamaMessage{Role: m.Role, Content: m.Content}
+	}
+
+	if len(req.Images) > 0 {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				messages[i].Images = req.Images
+				break
+			}
+		}
 	}
 
 	body := ollamaChatRequest{

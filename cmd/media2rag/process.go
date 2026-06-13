@@ -192,6 +192,12 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 		pipe.SetOutputDir(outputDir)
 	}
 
+	imagesDir := ""
+	if outputDir != "" {
+		imagesDir = filepath.Join(outputDir, "images")
+	}
+	images, _ := extractor.ExtractImages(cmd.Context(), source, imagesDir)
+
 	ec := model.ExtractedContent{
 		Content:   markdown,
 		Source:    source,
@@ -199,6 +205,7 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 		Author:    docAuthor,
 		Language:  docLang,
 		WordCount: wordCount,
+		Images:    images,
 	}
 
 	ragDoc, err := pipe.Run(cmd.Context(), ec, emitter)

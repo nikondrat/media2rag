@@ -3,12 +3,15 @@ package extract
 import (
 	"archive/zip"
 	"context"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"media2rag/internal/model"
 )
 
 type FB2Extractor struct{}
@@ -69,7 +72,14 @@ func readFromZip(path string) ([]byte, error) {
 }
 
 type FictionBook struct {
-	Body []Body `xml:"body"`
+	Body   []Body   `xml:"body"`
+	Binary []Binary `xml:"binary"`
+}
+
+type Binary struct {
+	ID      string `xml:"id,attr"`
+	ContentType string `xml:"content-type,attr"`
+	Data    string `xml:",chardata"`
 }
 
 type Body struct {
@@ -163,4 +173,55 @@ func isFB2Boilerplate(text string) bool {
 		}
 	}
 	return false
+}
+
+func (f *FB2Extractor) ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error) {
+	data, err := readFB2Data(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var book FictionBook
+	if err := xml.Unmarshal(data, &book); err != nil {
+		return nil, fmt.Errorf("parse fb2: %w", err)
+	}
+
+	if len(book.Binary) == 0 {
+		return nil, nil
+	}
+
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return nil, fmt.Errorf("create images dir: %w", err)
+	}
+
+	var images []model.ExtractedImage
+	for _, bin := range book.Binary {
+		if ctx.Err() != nil {
+			return images, ctx.Err()
+		}
+
+		ext := ".jpg"
+		if strings.Contains(bin.ContentType, "png") {
+			ext = ".png"
+		} else if strings.Contains(bin.ContentType, "gif") {
+			ext = ".gif"
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(bin.Data))
+		if err != nil {
+			continue
+		}
+
+		outPath := filepath.Join(outDir, bin.ID+ext)
+		if err := os.WriteFile(outPath, decoded, 0644); err != nil {
+			continue
+		}
+
+		images = append(images, model.ExtractedImage{
+			Path:    outPath,
+			AltText: fmt.Sprintf("Image from FB2: %s", bin.ID),
+		})
+	}
+
+	return images, nil
 }

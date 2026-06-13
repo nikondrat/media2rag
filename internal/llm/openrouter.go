@@ -36,9 +36,19 @@ func NewOpenRouterClient(baseURL, apiKey, model string, timeout time.Duration) *
 }
 
 type openRouterMessage struct {
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Role             string      `json:"role"`
+	Content          interface{} `json:"content"`
+	ReasoningContent string      `json:"reasoning_content,omitempty"`
+}
+
+type openRouterContentPart struct {
+	Type     string                `json:"type"`
+	Text     string                `json:"text,omitempty"`
+	ImageURL *openRouterImageURL   `json:"image_url,omitempty"`
+}
+
+type openRouterImageURL struct {
+	URL string `json:"url"`
 }
 
 type openRouterRequest struct {
@@ -157,6 +167,25 @@ func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*mo
 		messages[i] = openRouterMessage{Role: m.Role, Content: m.Content}
 	}
 
+	if len(req.Images) > 0 {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				textContent, _ := messages[i].Content.(string)
+				parts := []openRouterContentPart{
+					{Type: "text", Text: textContent},
+				}
+				for _, img := range req.Images {
+					parts = append(parts, openRouterContentPart{
+						Type:     "image_url",
+						ImageURL: &openRouterImageURL{URL: img},
+					})
+				}
+				messages[i].Content = parts
+				break
+			}
+		}
+	}
+
 	body := openRouterRequest{
 		Model:    c.model,
 		Messages: messages,
@@ -168,7 +197,10 @@ func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*mo
 		return nil, err
 	}
 
-	content := openAIResp.Choices[0].Message.Content
+	content := ""
+	if s, ok := openAIResp.Choices[0].Message.Content.(string); ok {
+		content = s
+	}
 	if content == "" {
 		content = openAIResp.Choices[0].Message.ReasoningContent
 	}

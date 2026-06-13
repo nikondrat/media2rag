@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"media2rag/internal/model"
 )
 
 type AudioExtractor struct{}
@@ -73,4 +75,8 @@ func checkCommand(name string) error {
 		return err
 	}
 	return nil
+}
+
+func (a *AudioExtractor) ExtractImages(ctx context.Context, path string, outDir string) ([]model.ExtractedImage, error) {
+	return nil, nil
 }
