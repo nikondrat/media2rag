@@ -7,8 +7,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
-
-	"media2rag/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 type LLMConfig struct {
@@ -22,12 +21,12 @@ type LLMConfig struct {
 }
 
 type PipelineConfig struct {
-	MaxTokens            int  `mapstructure:"max_tokens"`
-	ChunkSize            int  `mapstructure:"chunk_size"`
-	MaxConcurrency       int  `mapstructure:"max_concurrency"`
-	MaxFileConcurrency   int  `mapstructure:"max_file_concurrency"`
-	MaxTotalConcurrency  int  `mapstructure:"max_total_concurrency"`
-	HolisticAnalysis     *bool `mapstructure:"holistic_analysis"`
+	MaxTokens           int  `mapstructure:"max_tokens"`
+	ChunkSize           int  `mapstructure:"chunk_size"`
+	MaxConcurrency      int  `mapstructure:"max_concurrency"`
+	MaxFileConcurrency  int  `mapstructure:"max_file_concurrency"`
+	MaxTotalConcurrency int  `mapstructure:"max_total_concurrency"`
+	HolisticAnalysis    *bool `mapstructure:"holistic_analysis"`
 }
 
 type WorkspaceConfig struct {
@@ -35,10 +34,41 @@ type WorkspaceConfig struct {
 	CacheDir string `mapstructure:"cache_dir"`
 }
 
+type Provider struct {
+	Type string `yaml:"type" mapstructure:"type"`
+	URL  string `yaml:"url" mapstructure:"url"`
+	Key  string `yaml:"key,omitempty" mapstructure:"key"`
+}
+
+type Profile struct {
+	Backend  string `yaml:"backend" mapstructure:"backend"`
+	Provider string `yaml:"provider,omitempty" mapstructure:"provider"`
+	Model    string `yaml:"model" mapstructure:"model"`
+	Output   string `yaml:"output,omitempty" mapstructure:"output"`
+	FinalDir string `yaml:"final_dir,omitempty" mapstructure:"final_dir"`
+	Timeout  int    `yaml:"timeout,omitempty" mapstructure:"timeout"`
+}
+
+type LastUsed struct {
+	Source   string `yaml:"source,omitempty"`
+	Output   string `yaml:"output,omitempty"`
+	FinalDir string `yaml:"final_dir,omitempty"`
+}
+
+type Defaults struct {
+	OutputDir string `yaml:"output_dir,omitempty" mapstructure:"output_dir"`
+	FinalDir  string `yaml:"final_dir,omitempty" mapstructure:"final_dir"`
+}
+
 type Config struct {
-	LLM       LLMConfig       `mapstructure:"llm"`
-	Pipeline  PipelineConfig  `mapstructure:"pipeline"`
-	Workspace WorkspaceConfig `mapstructure:"workspace"`
+	LLM           LLMConfig            `yaml:"llm" mapstructure:"llm"`
+	Pipeline      PipelineConfig       `yaml:"pipeline" mapstructure:"pipeline"`
+	Workspace     WorkspaceConfig      `yaml:"workspace" mapstructure:"workspace"`
+	Providers     map[string]Provider  `yaml:"providers,omitempty"`
+	Profiles      map[string]Profile   `yaml:"profiles,omitempty"`
+	ActiveProfile string               `yaml:"active_profile,omitempty"`
+	Defaults      Defaults             `yaml:"defaults,omitempty"`
+	LastUsed      LastUsed             `yaml:"last_used,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -54,7 +84,16 @@ func DefaultConfig() Config {
 			MaxTokens:    4096,
 			ChunkSize:    1500,
 		},
+		Providers: map[string]Provider{
+			"lmstudio":   {Type: "lmstudio", URL: "http://localhost:1234"},
+			"ollama":     {Type: "ollama", URL: "http://localhost:11434"},
+			"openrouter": {Type: "openrouter", URL: "https://openrouter.ai/api"},
+		},
 	}
+}
+
+func ConfigPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".media2rag", "config.yaml")
 }
 
 func Load(configPath string) (*Config, error) {
@@ -62,7 +101,7 @@ func Load(configPath string) (*Config, error) {
 
 	v := viper.New()
 
-	defaultYAML := filepath.Join(os.Getenv("HOME"), ".media2rag", "config.yaml")
+	defaultYAML := ConfigPath()
 	if configPath != "" {
 		v.SetConfigFile(configPath)
 	} else {
@@ -115,10 +154,72 @@ func Load(configPath string) (*Config, error) {
 	return &cfg, nil
 }
 
+func (c *Config) Save() error {
+	path := ConfigPath()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	return os.WriteFile(path, data, 0644)
+}
+
 func (c *Config) Validate() error {
-	if c.LLM.DefaultBackend != "ollama" && c.LLM.DefaultBackend != "openrouter" && c.LLM.DefaultBackend != "lmstudio" {
-		return fmt.Errorf("%w: DefaultBackend must be \"ollama\", \"openrouter\", or \"lmstudio\", got %q",
-			model.ErrConfigInvalid, c.LLM.DefaultBackend)
+	if c.LLM.DefaultBackend != "ollama" && c.LLM.DefaultBackend != "openrouter" && c.LLM.DefaultBackend != "lmstudio" && c.LLM.DefaultBackend != "openai-compatible" {
+		return fmt.Errorf("DefaultBackend must be \"ollama\", \"openrouter\", \"lmstudio\", or \"openai-compatible\", got %q",
+			c.LLM.DefaultBackend)
 	}
 	return nil
+}
+
+func (c *Config) ActiveProfileConfig() *Profile {
+	if c.ActiveProfile == "" {
+		return nil
+	}
+	p, ok := c.Profiles[c.ActiveProfile]
+	if !ok {
+		return nil
+	}
+	return &p
+}
+
+func (c *Config) GetProvider(name string) *Provider {
+	p, ok := c.Providers[name]
+	if !ok {
+		return nil
+	}
+	return &p
+}
+
+func (c *Config) ResolveBackend() string {
+	if p := c.ActiveProfileConfig(); p != nil && p.Backend != "" {
+		return p.Backend
+	}
+	return c.LLM.DefaultBackend
+}
+
+func (c *Config) ResolveModel() string {
+	if p := c.ActiveProfileConfig(); p != nil && p.Model != "" {
+		return p.Model
+	}
+	return c.LLM.Model
+}
+
+func (c *Config) ResolveOutput() string {
+	if p := c.ActiveProfileConfig(); p != nil && p.Output != "" {
+		return p.Output
+	}
+	return c.Defaults.OutputDir
+}
+
+func (c *Config) ResolveFinalDir() string {
+	if p := c.ActiveProfileConfig(); p != nil && p.FinalDir != "" {
+		return p.FinalDir
+	}
+	return c.Defaults.FinalDir
 }

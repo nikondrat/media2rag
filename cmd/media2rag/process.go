@@ -80,6 +80,7 @@ Accepts a single file (.md), a URL, or a directory of .md files.
 When a directory is given, all .md files (non-recursive) are processed.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		applyDefaults()
 		source := args[0]
 
 		if processDryRun {
@@ -96,7 +97,11 @@ When a directory is given, all .md files (non-recursive) are processed.`,
 			return processDirectory(cmd, source)
 		}
 
-		return processFile(cmd, source)
+		err = processFile(cmd, source)
+		if err == nil {
+			saveLastUsed(source)
+		}
+		return err
 	},
 }
 
@@ -190,7 +195,7 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 	ec := model.ExtractedContent{
 		Content:   markdown,
 		Source:    source,
-		DocType:   workspace.SourceType(source),
+		DocType:   extractor.ContentType(),
 		Author:    docAuthor,
 		Language:  docLang,
 		WordCount: wordCount,
@@ -401,4 +406,26 @@ func init() {
 	processCmd.Flags().IntVar(&processFileConcurrency, "file-concurrency", 0, "max files to process in parallel")
 	processCmd.Flags().IntVar(&processTotalConcurrency, "total-concurrency", 0, "max concurrent LLM requests")
 	rootCmd.AddCommand(processCmd)
+}
+
+func applyDefaults() {
+	if processBackend == "" {
+		processBackend = cfg.ResolveBackend()
+	}
+	if processModel == "" {
+		processModel = cfg.ResolveModel()
+	}
+	if processOutputDir == "" {
+		processOutputDir = cfg.ResolveOutput()
+	}
+	if processFinalDir == "" {
+		processFinalDir = cfg.ResolveFinalDir()
+	}
+}
+
+func saveLastUsed(source string) {
+	cfg.LastUsed.Source = source
+	cfg.LastUsed.Output = processOutputDir
+	cfg.LastUsed.FinalDir = processFinalDir
+	_ = cfg.Save()
 }

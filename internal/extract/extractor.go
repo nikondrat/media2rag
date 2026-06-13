@@ -8,7 +8,14 @@ import (
 type Extractor interface {
 	Detect(path string) bool
 	Extract(ctx context.Context, path string) (string, error)
+	ContentType() string
 }
+
+const (
+	ContentTypeTranscript = "transcript"
+	ContentTypeBook       = "book"
+	ContentTypeClean      = "clean"
+)
 
 type Registry struct {
 	extractors []Extractor

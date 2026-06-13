@@ -12,6 +12,10 @@ import (
 
 type VideoExtractor struct{}
 
+func (v *VideoExtractor) ContentType() string {
+	return ContentTypeTranscript
+}
+
 var videoExtensions = map[string]bool{
 	".mp4": true, ".mkv": true, ".avi": true,
 	".mov": true, ".webm": true, ".flv": true,

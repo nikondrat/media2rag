@@ -10,6 +10,10 @@ import (
 
 type LocalFileExtractor struct{}
 
+func (l *LocalFileExtractor) ContentType() string {
+	return ContentTypeClean
+}
+
 func (l *LocalFileExtractor) Detect(path string) bool {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return false

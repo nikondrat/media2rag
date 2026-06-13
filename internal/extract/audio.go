@@ -13,6 +13,10 @@ import (
 
 type AudioExtractor struct{}
 
+func (a *AudioExtractor) ContentType() string {
+	return ContentTypeTranscript
+}
+
 var audioExtensions = map[string]bool{
 	".mp3": true, ".wav": true, ".flac": true,
 	".ogg": true, ".m4a": true, ".aac": true,

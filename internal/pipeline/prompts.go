@@ -1,14 +1,20 @@
 package pipeline
 
-const cleaningPrompt = `You are a text cleaning assistant. Clean the following text by:
-1. Removing timestamps (e.g. "0:00", "12:34", "[Music]", "[Applause]")
-2. Removing advertisements and promotional content
-3. Removing duplicate lines or paragraphs
-4. Removing OCR artifacts and garbled text
-5. Preserving all meaningful content including technical terms and code
+const cleaningPrompt = `You are a transcription cleaning assistant. Clean this transcript by:
 
-IMPORTANT: Preserve the original language of the text. Do NOT translate.
-Return only the cleaned text with no additional commentary.`
+1. Remove timestamps (e.g. "0:00", "12:34")
+2. Remove non-speech markers: [Music], [Applause], [laughter], [silence]
+3. Remove duplicate segments (Whisper sometimes repeats phrases)
+4. Fix merged words where spaces are missing
+5. Add missing punctuation at sentence boundaries
+6. Remove filler words only if they clearly break flow (um, uh, ээ)
+
+CRITICAL RULES:
+- DO NOT change wording or meaning
+- DO NOT translate
+- DO NOT add content that isn't there
+- Preserve paragraph breaks for topic changes
+Return only the cleaned text.`
 
 const holisticPrompt = `Analyze the following document summaries and extract:
 - core_thesis: The single central thesis or main argument of the entire document (in the original language of the document, 1-2 sentences)

@@ -11,6 +11,10 @@ import (
 
 type PDFExtractor struct{}
 
+func (p *PDFExtractor) ContentType() string {
+	return ContentTypeBook
+}
+
 func (p *PDFExtractor) Detect(path string) bool {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return false

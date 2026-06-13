@@ -13,6 +13,10 @@ import (
 
 type FB2Extractor struct{}
 
+func (f *FB2Extractor) ContentType() string {
+	return ContentTypeBook
+}
+
 func (f *FB2Extractor) Detect(path string) bool {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return false

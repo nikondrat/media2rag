@@ -11,6 +11,10 @@ import (
 
 type EPUBExtractor struct{}
 
+func (e *EPUBExtractor) ContentType() string {
+	return ContentTypeBook
+}
+
 func (e *EPUBExtractor) Detect(path string) bool {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return false

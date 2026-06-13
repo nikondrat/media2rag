@@ -12,6 +12,10 @@ import (
 
 type URLExtractor struct{}
 
+func (u *URLExtractor) ContentType() string {
+	return ContentTypeTranscript
+}
+
 func (u *URLExtractor) Detect(path string) bool {
 	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
 }

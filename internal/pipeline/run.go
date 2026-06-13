@@ -31,13 +31,20 @@ func (p *Pipeline) Run(ctx context.Context, ec model.ExtractedContent, emitter e
 	emitter.Emit(model.Event{Type: EventPipelineStart, Data: map[string]int{"text_length": len(ec.Content)}})
 	p.saveIntermediate("raw.md", ec.Content)
 
-	cleaned, err := p.preClean(ctx, ec.Content, emitter)
-	if err != nil {
-		p.setFailed(err)
-		return nil, fmt.Errorf("pre-clean: %w", err)
+	cleaned := ec.Content
+	if ec.DocType == "transcript" {
+		var err error
+		cleaned, err = p.preClean(ctx, ec.Content, emitter)
+		if err != nil {
+			p.setFailed(err)
+			return nil, fmt.Errorf("pre-clean: %w", err)
+		}
+		p.saveIntermediate("cleaned.md", cleaned)
+		emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
+	} else {
+		p.saveIntermediate("cleaned.md", cleaned)
+		emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
 	}
-	p.saveIntermediate("cleaned.md", cleaned)
-	emitter.Emit(model.Event{Type: EventPreCleanDone, Data: map[string]int{"text_length": len(cleaned)}})
 
 	emitter.Emit(model.Event{Type: EventSplitting})
 	rawChunks, err := p.splitText(cleaned)
