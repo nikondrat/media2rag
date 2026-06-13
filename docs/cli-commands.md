@@ -87,25 +87,29 @@ cost: $0.3421
 
 ### Output структура (с `-d`)
 
+При обработке одного файла или директории, каждый документ получает
+поддиректорию по названию (из filename/stem → title документа):
+
 ```
 <output-dir>/
-├── <title>.md                    # Копия final.md с именем по тайтлу
-├── output/
-│   └── final.md                  # Финальный RAG-ready Markdown
-├── chunks/
-│   ├── chunk_001.md
-│   └── chunk_002.md
-├── intermediate/
-│   ├── raw.md                    # Сырой extracted контент
-│   ├── cleaned.md                # После preClean
-│   └── holistic.md              # core_thesis + domains
-├── results/
-│   ├── result_001.json           # Per-chunk результат
-│   └── result_002.json
-├── process.log                   # Лог обработки
-├── status.yaml                   # Статус для resume
-├── .media2rag.yaml               # Метаданные
-└── telemetry.jsonl               # LLM вызовы (токены, cost, latency)
+└── <title документа>/
+    ├── <title>.md                    # Копия final.md с именем по тайтлу
+    ├── output/
+    │   └── final.md                  # Финальный RAG-ready Markdown
+    ├── chunks/
+    │   ├── chunk_001.md
+    │   └── chunk_002.md
+    ├── intermediate/
+    │   ├── raw.md                    # Сырой extracted контент
+    │   ├── cleaned.md                # После preClean
+    │   └── holistic.md              # core_thesis + domains
+    ├── results/
+    │   ├── result_001.json           # Per-chunk результат
+    │   └── result_002.json
+    ├── process.log                   # Лог обработки
+    ├── status.yaml                   # Статус для resume
+    ├── .media2rag.yaml               # Метаданные
+    └── telemetry.jsonl               # LLM вызовы (токены, cost, latency)
 ```
 
 ### Pipeline stages

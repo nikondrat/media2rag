@@ -115,7 +115,16 @@ func processFile(cmd *cobra.Command, source string) error {
 		}
 	}
 
-	return runProcessFile(cmd, source, emitter, processOutputDir)
+	outputDir := processOutputDir
+	if outputDir != "" {
+		stem := filepath.Base(source)
+		if ext := filepath.Ext(stem); ext != "" {
+			stem = stem[:len(stem)-len(ext)]
+		}
+		outputDir = filepath.Join(outputDir, stem)
+	}
+
+	return runProcessFile(cmd, source, emitter, outputDir)
 }
 
 func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitter, outputDir string) (err error) {
@@ -191,6 +200,15 @@ func runProcessFile(cmd *cobra.Command, source string, emitter events.EventEmitt
 	if err != nil {
 		emitter.Emit(model.Event{Type: "error", Error: fmt.Sprintf("pipeline: %v", err)})
 		return fmt.Errorf("pipeline: %w", err)
+	}
+
+	if outputDir != "" && ragDoc.Metadata.Title != "" {
+		titleDir := filepath.Join(filepath.Dir(outputDir), pipeline.SanitizeFilename(ragDoc.Metadata.Title))
+		if titleDir != outputDir {
+			if err := os.Rename(outputDir, titleDir); err == nil {
+				outputDir = titleDir
+			}
+		}
 	}
 
 	version, err := ws.SaveVersion(wDoc.Hash, ragDoc.Markdown)
