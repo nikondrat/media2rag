@@ -64,6 +64,11 @@ func init() {
 
 	extractorRegistry = extract.NewRegistry()
 	extractorRegistry.Register(&extract.URLExtractor{})
+	extractorRegistry.Register(&extract.AudioExtractor{})
+	extractorRegistry.Register(&extract.VideoExtractor{})
+	extractorRegistry.Register(&extract.PDFExtractor{})
+	extractorRegistry.Register(&extract.EPUBExtractor{})
+	extractorRegistry.Register(&extract.FB2Extractor{})
 	extractorRegistry.Register(&extract.LocalFileExtractor{})
 }
 
