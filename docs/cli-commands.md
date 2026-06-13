@@ -178,9 +178,90 @@ media2rag documents delete a1b2c3d4 --force
 
 ---
 
-## `media2rag chat` (stub)
+## `media2rag index <file|dir>`
 
-Заглушка. Команда не реализована — AI агенты вызывают CLI напрямую.
+Индексировать RAGDocument в Qdrant для векторного поиска.
+
+```bash
+media2rag index ./output/final.md
+media2rag index ./documents/
+```
+
+---
+
+## `media2rag rag <query>`
+
+Поиск по проиндексированным чанкам через гибридный поиск.
+
+```bash
+media2rag rag "как масштабировать бизнес"
+media2rag rag "RAG architecture" --top-k 10
+```
+
+---
+
+## `media2rag mcp`
+
+Запуск MCP-сервера (stdio транспорт) для интеграции с IDE и AI-агентами.
+
+```bash
+media2rag mcp
+```
+
+---
+
+## `media2rag mcp-serve`
+
+Запуск MCP-сервера (HTTP транспорт) для сетевой интеграции.
+
+```bash
+media2rag mcp-serve --port 8080
+```
+
+| Флаг | По умолч. | Описание |
+|------|-----------|----------|
+| `--port` | `8080` | HTTP порт |
+
+---
+
+## `media2rag preprocess <query>`
+
+Оптимизировать запрос для RAG-поиска через LLM (добавление синонимов, ключевых слов).
+
+```bash
+media2rag preprocess "what is RAG?"
+media2rag preprocess "как масштабировать" --variants 3
+```
+
+| Флаг | По умолч. | Описание |
+|------|-----------|----------|
+| `--variants` | `1` | Количество вариантов запроса |
+| `--context-file` | `""` | Файл с контекстом |
+| `--format` | `text` | Формат вывода (text, md) |
+
+---
+
+## `media2rag serve`
+
+HTTP-сервер с OpenAPI эндпоинтом для подключения к OpenWebUI.
+
+```bash
+media2rag serve --port 8080
+```
+
+| Флаг | По умолч. | Описание |
+|------|-----------|----------|
+| `--port` | `8080` | HTTP порт |
+
+---
+
+## `media2rag setup`
+
+Проверить и установить необходимые зависимости (npx, ffmpeg, whisper, pdftotext).
+
+```bash
+media2rag setup
+```
 
 ---
 

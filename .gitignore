@@ -29,6 +29,9 @@ workspace/
 output/
 .media2rag.yaml
 
+# Agent tools
+.mimocode/
+
 # System
 __pycache__/
 *.pyc
