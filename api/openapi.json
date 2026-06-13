@@ -1,0 +1,239 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "media2rag",
+    "description": "Convert any content into RAG-ready Markdown with structured metadata",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local media2rag server"
+    }
+  ],
+  "paths": {
+    "/process": {
+      "post": {
+        "operationId": "process",
+        "summary": "Process content into RAG-ready Markdown",
+        "description": "Process a URL, file, or directory through the CTG pipeline",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source"],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "URL or file path to process"
+                  },
+                  "output_dir": {
+                    "type": "string",
+                    "description": "Output directory for processed files"
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "description": "Force reprocessing",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Processing result",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rag": {
+      "post": {
+        "operationId": "rag",
+        "summary": "Search indexed documents",
+        "description": "Search through indexed document chunks using hybrid vector search",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Search query"
+                  },
+                  "top": {
+                    "type": "integer",
+                    "description": "Number of results to return",
+                    "default": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/index": {
+      "post": {
+        "operationId": "index",
+        "summary": "Index documents to vector database",
+        "description": "Index processed document chunks into Qdrant vector database",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["directory"],
+                "properties": {
+                  "directory": {
+                    "type": "string",
+                    "description": "Directory containing processed chunks"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Indexing result",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents": {
+      "post": {
+        "operationId": "documents",
+        "summary": "Manage processed documents",
+        "description": "List, show, or delete processed documents",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": ["list", "show", "delete"],
+                    "description": "Action to perform"
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "Document ID (for show/delete)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Document operation result",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Check LLM backend health",
+        "description": "Check LLM backend health and model availability",
+        "responses": {
+          "200": {
+            "description": "Health status",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/preprocess": {
+      "post": {
+        "operationId": "preprocess",
+        "summary": "Optimize query for RAG search",
+        "description": "Rewrite a query using LLM to improve retrieval from knowledge base",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Query to optimize"
+                  },
+                  "variants": {
+                    "type": "integer",
+                    "description": "Number of query variants to generate",
+                    "default": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Optimized query",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
