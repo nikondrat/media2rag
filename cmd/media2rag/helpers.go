@@ -20,11 +20,11 @@ func dryRunDirectory(dir string) error {
 		if entry.IsDir() {
 			continue
 		}
-		ext := filepath.Ext(entry.Name())
-		if ext != ".md" && ext != ".markdown" {
+		if strings.HasPrefix(entry.Name(), "._") {
 			continue
 		}
-		if strings.HasPrefix(entry.Name(), "._") {
+		path := filepath.Join(dir, entry.Name())
+		if _, err := extractorRegistry.Find(path); err != nil {
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "  %s\n", entry.Name())

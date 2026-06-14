@@ -43,14 +43,14 @@ func processDirectory(cmd *cobra.Command, dir string) error {
 			continue
 		}
 		name := entry.Name()
-		ext := filepath.Ext(name)
-		if ext != ".md" && ext != ".markdown" {
-			continue
-		}
 		if strings.HasPrefix(name, "._") {
 			continue
 		}
-		jobs = append(jobs, fileJob{path: filepath.Join(dir, name), name: name})
+		path := filepath.Join(dir, name)
+		if _, err := extractorRegistry.Find(path); err != nil {
+			continue
+		}
+		jobs = append(jobs, fileJob{path: path, name: name})
 	}
 
 	total := len(jobs)
