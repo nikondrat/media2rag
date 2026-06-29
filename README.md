@@ -1,30 +1,202 @@
 # media2rag
 
-Single Go binary that converts any content into RAG-ready Markdown.
+**Любой контент → единый Markdown → RAG-ready база знаний. Одна команда.**
 
-## Quick start
+Я — Никита, 20, самоучка с 12. Собрал 400+ источников в базу знаний.
+Набил шишки на локальных LLM. Понял, где их границы и когда нужны облачные.
 
-```bash
-# Build
-go build -o media2rag ./cmd/media2rag
+Проект закрыл свою задачу: экстрактор и препроцессор. Для RAG-оркестрации
+использую **Dify** — не изобретаю велосипед.
 
-# Process a URL (web page, YouTube, Telegram, GitHub — anything)
-./media2rag process https://example.com/article
+<p>
+  <img src="https://img.shields.io/badge/processed-407%20sources-8A2BE2" alt="407 sources">
+  <img src="https://img.shields.io/badge/tokens-31M-FF6B6B" alt="31M tokens">
+  <img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8" alt="Go">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
+</p>
 
-# Process a local Markdown file
-./media2rag process ./notes.md
+---
 
-# Start HTTP daemon for chat/RAG/coaching
-./media2rag serve
+## Что я понял
+
+Проект начинался с гипотезы: «Распилю на чанки, каждый пропущу через LLM
+с кучей ключей — summary, confidence, key_points, causal chains...»
+
+Проверил на 400+ источниках. Выводы:
+
+- **Локальные LLM теряют контекст на чанках.** Глубокая экстракция смысла
+  через локальные модели не работает.
+- **Много ключей = шум.** Модель заполняет формально, пользы ноль.
+- **Сильная модель + сырая транскрипция > локальный пайплайн.** Claude выдал
+  те же выводы, что я после просмотра видео. Без 8 стадий.
+
+**Итог:** media2rag — отличный экстрактор, но не замена сильной LLM.
+Логика конвейера крутая, промпты можно докручивать. Для себя — закрыл.
+
+Философия: настоящесть сильнее скриптов. README не обещает идеального
+инструмента — он рассказывает, что реально работает, а что нет.
+Это фундамент. Техника и фичи работают поверх него, а не вместо.
+
+---
+
+## Телеметрия (реальные цифры)
+
+**400+ источников**, **31 млн токенов**, **10 суток** процессорного времени.
+
+| Параметр | Локально (LM Studio) | Облако (DeepSeek v4 Flash) |
+|----------|---------------------|--------------------------|
+| Источников | 294 | 113 |
+| Токенов in | 10.4M | 7.4M |
+| Токенов out | 20.9M | 6.1M |
+| Время | 10 суток | — |
+| Стоимость | **$0** | **$2.63** |
+| За источник | бесплатно | **~$0.02** |
+
+Локально: Telegram-каналы по аналитике и бизнесу (225+ постов).
+Облачно: YouTube-лекции предпринимателей, 113 видео по 2 цента.
+
+---
+
+## Как это устроено
+
+```
+YouTube / Telegram / PDF / EPUB / Audio / Video
+  │
+  ▼
+[npx rdrr / Whisper / pdftotext]  — извлечение сырого текста
+  │
+  ▼
+[media2rag pipeline]              — очистка → сплит → чанки → метаданные
+  │
+  ▼
+Чистый Markdown
+  │
+  ▼
+[Dify / Qdrant / OpenWebUI]       — RAG-оркестрация
 ```
 
-## Requirements
+Ключевая фича: **любой формат → общий MD → единый pipeline**. Инструменту
+не важно, что было на входе — всё идёт через одну воронку.
 
-- Go 1.22+
-- `npx rdrr` for URL processing (`npm i -g rdrr`)
-- Ollama or OpenAI-compatible API key
-- Qdrant for vector storage
+---
 
-## Docs
+## Что протестировано
 
-See `docs/` for architecture and design.
+| Формат | Статус | Объём |
+|--------|--------|-------|
+| YouTube (через `npx rdrr`) | ✅ Полноценно | 174 видео |
+| Telegram-каналы | ✅ Полноценно | 225 постов |
+| Книги EPUB/FB2 | ⚡ Частично | 6 книг |
+| PDF | ⚠️ Сыро (картинки не встраиваются) | Несколько |
+| Аудио (Whisper local) | ⚡ 1 файл | 1 |
+
+PDF — самое слабое место. Обработка картинок и их встраивание в контент
+работает некорректно. Если тебе нужен PDF — учти это.
+
+---
+
+## Почему LM Studio, не Ollama
+
+Ollama — 1 поток, медленно. LM Studio — **4 параллельных потока** на одной
+модели, скорость выхода токенов выше. Те же 294 источника прогнал на LM Studio.
+
+Для масштаба: 294 локальных источника = 10 суток процессорного времени.
+С Ollama было бы в разы дольше.
+
+---
+
+## Для кого это
+
+- Строишь RAG-пайплайн — устал чистить контент руками
+- Перерабатываешь YouTube, Telegram, книги в базу знаний
+- Интегрируешь данные в Dify, OpenWebUI, Qdrant
+- Хочешь понять реальный потолок локальных LLM с цифрами в руках
+
+---
+
+## Быстрый старт
+
+```bash
+go build -o media2rag ./cmd/media2rag
+
+./media2rag process https://youtu.be/example   # YouTube
+./media2rag process ./notes.md                  # Локальный файл
+./media2rag process ./dir/                      # Пакетная обработка
+./media2rag serve                               # HTTP API
+```
+
+---
+
+## Возможности
+
+| Формат | Команда |
+|--------|---------|
+| URL (YouTube, Telegram, GitHub...) | `process <url>` |
+| Markdown | `process ./file.md` |
+| PDF | `process ./file.pdf` |
+| EPUB / FB2 | `process ./book.epub` |
+| Аудио (Whisper) | `process ./audio.mp3` |
+| Видео (ffmpeg + Whisper) | `process ./video.mp4` |
+| Пакетная обработка | `process ./dir/` |
+| Qdrant-индексация | `index` |
+| Гибридный поиск | `rag <query>` |
+| MCP-сервер | `mcp` / `mcp-serve` |
+| OpenAPI-сервер | `serve` |
+
+---
+
+## Почему Go
+
+Один бинарник. Нет окружения, нет зависимостей рантайма. Скачал — запустил.
+
+---
+
+## Об авторе
+
+Никита, 20. Самоучка с 12. Flutter (4 г.), Swift, Go, Rust.
+Строю RAG-пайплайны, копаюсь в LLM, проектирую архитектуру.
+
+Сейчас: соло iOS-разработчик events_cloud (90K строк, VIPER).
+Прошлое: Rust-парсер MOEX (2 млн записей/день), cctx-mcp.
+
+- Telegram: [@nikondrat](https://t.me/nikondrat)
+- GitHub: [github.com/nikondrat](https://github.com/nikondrat)
+
+Открыт к предложениям: доработка, консультации, интеграции.
+
+---
+
+## Архитектура
+
+```
+Вход → [Extract → Clean → Split → Assemble] → MD → [Dify/Qdrant]
+```
+
+Детали — в `docs/`.
+
+---
+
+## Команды
+
+| Команда | Назначение |
+|---------|-----------|
+| `process` | Контент → RAG Markdown |
+| `serve` | HTTP-сервер (OpenAPI) |
+| `rag` | Поиск по Qdrant |
+| `index` | Индексация в Qdrant |
+| `health` | Проверка LLM-бэкендов |
+| `config` | Конфигуратор |
+| `mcp` | MCP-сервер |
+| `setup` | Проверка зависимостей |
+
+---
+
+## Требования
+
+Go 1.22+, `npx rdrr`, LM Studio или OpenRouter, Qdrant, poppler, ffmpeg + whisper.
+
+---
+
+## Лицензия
+
+MIT
