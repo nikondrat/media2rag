@@ -66,6 +66,9 @@ type chunkJob struct {
 	text  string
 }
 
+func intPtr(v int) *int       { return &v }
+func float64Ptr(v float64) *float64 { return &v }
+
 func (p *Pipeline) processChunks(ctx context.Context, chunks []string, emitter events.EventEmitter) ([]ChunkResult, error) {
 	results := make([]ChunkResult, len(chunks))
 	for i := range results {
@@ -179,12 +182,33 @@ func (p *Pipeline) processSingle(ctx context.Context, text string, chunkIndex in
 				{Role: "system", Content: systemPrompt},
 				{Role: "user", Content: text},
 			},
+			MaxTokens:        intPtr(p.config.MaxTokens),
+			FrequencyPenalty: float64Ptr(p.config.FrequencyPenalty),
+			PresencePenalty:  float64Ptr(p.config.PresencePenalty),
 		})
 		_ = start
 		cancel()
 
 		if err != nil {
 			return ChunkResult{}, err
+		}
+
+		if detectRepetition(resp.Message.Content) {
+			if attempt < maxRetries {
+				emitter.Emit(model.Event{
+					Type: EventProcessingRetry,
+					Data: map[string]interface{}{
+						"chunk":   chunkIndex + 1,
+						"attempt": attempt + 1,
+						"error":   "repetition detected",
+					},
+				})
+				systemPrompt = chunkPrompt + "\n\n" +
+					"CRITICAL: Your previous response contained repetitive hallucinated text. " +
+					"Generate a completely NEW response. Do NOT repeat words or phrases."
+				continue
+			}
+			return ChunkResult{}, fmt.Errorf("repetition detected after retries")
 		}
 
 		parsed := parsePromptResult(resp.Message.Content)

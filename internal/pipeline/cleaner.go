@@ -118,6 +118,9 @@ func (p *Pipeline) cleanSinglePart(ctx context.Context, text string) (string, er
 				{Role: "system", Content: cleaningPrompt},
 				{Role: "user", Content: text},
 			},
+			MaxTokens:        intPtr(p.config.MaxTokens),
+			FrequencyPenalty: float64Ptr(p.config.FrequencyPenalty),
+			PresencePenalty:  float64Ptr(p.config.PresencePenalty),
 		})
 		cancel()
 		if err != nil {
@@ -130,6 +133,12 @@ func (p *Pipeline) cleanSinglePart(ctx context.Context, text string) (string, er
 			lastErr = fmt.Errorf("llm returned empty response")
 			continue
 		}
+
+		if detectRepetition(content) {
+			lastErr = fmt.Errorf("repetition detected in cleaning output")
+			continue
+		}
+
 		return content, nil
 	}
 	return "", fmt.Errorf("all %d attempts failed: %w", maxRetries+1, lastErr)
