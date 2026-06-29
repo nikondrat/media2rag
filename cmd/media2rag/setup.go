@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -25,9 +26,12 @@ type dependency struct {
 func getDependencies() []dependency {
 	deps := []dependency{
 		{Name: "npx", Command: "npx", Required: true, Install: "Install Node.js: https://nodejs.org"},
+		{Name: "pdftotext", Command: "pdftotext", Required: true, Install: installCmd("poppler")},
+		{Name: "pdfinfo", Command: "pdfinfo", Required: true, Install: installCmd("poppler")},
+		{Name: "pdfimages", Command: "pdfimages", Required: false, Install: installCmd("poppler")},
+		{Name: "ocrmypdf", Command: "ocrmypdf", Required: false, Install: "pip3 install ocrmypdf && brew install tesseract tesseract-lang"},
 		{Name: "ffmpeg", Command: "ffmpeg", Required: false, Install: installCmd("ffmpeg")},
 		{Name: "whisper", Command: "whisper", Required: false, Install: "pip install openai-whisper"},
-		{Name: "pdftotext", Command: "pdftotext", Required: false, Install: installCmd("poppler")},
 	}
 	return deps
 }
@@ -54,7 +58,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		status := "✅"
 		if found != nil {
 			status = "❌"
-			allOk = false
+			if dep.Required {
+				allOk = false
+			}
 		}
 
 		req := ""
@@ -69,15 +75,38 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if checkCommand("ocrmypdf") == nil {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Checking OCR language data...")
+		checkTesseractLang("eng")
+		checkTesseractLang("rus")
+	}
+
 	fmt.Fprintln(os.Stderr)
 
 	if !allOk {
-		fmt.Fprintln(os.Stderr, "Some dependencies are missing. Install them and run 'media2rag setup' again.")
+		fmt.Fprintln(os.Stderr, "Some required dependencies are missing. Install them and run 'media2rag setup' again.")
 		return fmt.Errorf("setup incomplete")
 	}
 
-	fmt.Fprintln(os.Stderr, "All dependencies are installed!")
+	fmt.Fprintln(os.Stderr, "All required dependencies are installed!")
 	return nil
+}
+
+func checkTesseractLang(lang string) {
+	cmd := exec.Command("tesseract", "--list-langs")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ tesseract language '%s': cannot check\n", lang)
+		return
+	}
+
+	if strings.Contains(string(output), lang) {
+		fmt.Fprintf(os.Stderr, "✅ tesseract language '%s'\n", lang)
+	} else {
+		fmt.Fprintf(os.Stderr, "❌ tesseract language '%s': not installed\n", lang)
+		fmt.Fprintf(os.Stderr, "   Install: curl -L -o /opt/homebrew/share/tessdata/%s.traineddata https://github.com/tesseract-ocr/tessdata/raw/main/%s.traineddata\n", lang, lang)
+	}
 }
 
 func checkCommand(name string) error {
