@@ -72,6 +72,14 @@ type ollamaChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
 	Stream   bool            `json:"stream"`
+	Options  *ollamaOptions  `json:"options,omitempty"`
+}
+
+type ollamaOptions struct {
+	NumPredict     int      `json:"num_predict,omitempty"`
+	Stop           []string `json:"stop,omitempty"`
+	FrequencyPenalty float64 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  float64 `json:"presence_penalty,omitempty"`
 }
 
 type ollamaMessage struct {
@@ -126,6 +134,23 @@ func (c *OllamaClient) Chat(ctx context.Context, req model.ChatRequest) (*model.
 		Model:    c.model,
 		Messages: messages,
 		Stream:   false,
+	}
+
+	if req.MaxTokens != nil || len(req.Stop) > 0 || req.FrequencyPenalty != nil || req.PresencePenalty != nil {
+		opts := &ollamaOptions{}
+		if req.MaxTokens != nil {
+			opts.NumPredict = *req.MaxTokens
+		}
+		if len(req.Stop) > 0 {
+			opts.Stop = req.Stop
+		}
+		if req.FrequencyPenalty != nil {
+			opts.FrequencyPenalty = *req.FrequencyPenalty
+		}
+		if req.PresencePenalty != nil {
+			opts.PresencePenalty = *req.PresencePenalty
+		}
+		body.Options = opts
 	}
 
 	var buf bytes.Buffer
@@ -197,6 +222,23 @@ func (c *OllamaClient) StreamChat(ctx context.Context, req model.ChatRequest) (<
 		Model:    c.model,
 		Messages: messages,
 		Stream:   true,
+	}
+
+	if req.MaxTokens != nil || len(req.Stop) > 0 || req.FrequencyPenalty != nil || req.PresencePenalty != nil {
+		opts := &ollamaOptions{}
+		if req.MaxTokens != nil {
+			opts.NumPredict = *req.MaxTokens
+		}
+		if len(req.Stop) > 0 {
+			opts.Stop = req.Stop
+		}
+		if req.FrequencyPenalty != nil {
+			opts.FrequencyPenalty = *req.FrequencyPenalty
+		}
+		if req.PresencePenalty != nil {
+			opts.PresencePenalty = *req.PresencePenalty
+		}
+		body.Options = opts
 	}
 
 	var buf bytes.Buffer

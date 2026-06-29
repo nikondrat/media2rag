@@ -7,10 +7,14 @@ type Usage struct {
 }
 
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-	Images   []string  `json:"images,omitempty"`
+	Model            string    `json:"model"`
+	Messages         []Message `json:"messages"`
+	Stream           bool      `json:"stream"`
+	Images           []string  `json:"images,omitempty"`
+	MaxTokens        *int      `json:"max_tokens,omitempty"`
+	Stop             []string  `json:"stop,omitempty"`
+	FrequencyPenalty *float64  `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64  `json:"presence_penalty,omitempty"`
 }
 
 type ChatResponse struct {

@@ -21,12 +21,14 @@ type LLMConfig struct {
 }
 
 type PipelineConfig struct {
-	MaxTokens           int  `mapstructure:"max_tokens"`
-	ChunkSize           int  `mapstructure:"chunk_size"`
-	MaxConcurrency      int  `mapstructure:"max_concurrency"`
-	MaxFileConcurrency  int  `mapstructure:"max_file_concurrency"`
-	MaxTotalConcurrency int  `mapstructure:"max_total_concurrency"`
-	HolisticAnalysis    *bool `mapstructure:"holistic_analysis"`
+	MaxTokens           int     `mapstructure:"max_tokens"`
+	ChunkSize           int     `mapstructure:"chunk_size"`
+	MaxConcurrency      int     `mapstructure:"max_concurrency"`
+	MaxFileConcurrency  int     `mapstructure:"max_file_concurrency"`
+	MaxTotalConcurrency int     `mapstructure:"max_total_concurrency"`
+	FrequencyPenalty    float64 `mapstructure:"frequency_penalty"`
+	PresencePenalty     float64 `mapstructure:"presence_penalty"`
+	HolisticAnalysis    *bool   `mapstructure:"holistic_analysis"`
 }
 
 type WorkspaceConfig struct {
@@ -81,8 +83,10 @@ func DefaultConfig() Config {
 			Timeout:        600,
 		},
 		Pipeline: PipelineConfig{
-			MaxTokens:    4096,
-			ChunkSize:    1500,
+			MaxTokens:        8192,
+			ChunkSize:        1500,
+			FrequencyPenalty: 0.3,
+			PresencePenalty:  0.3,
 		},
 		Providers: map[string]Provider{
 			"lmstudio":   {Type: "lmstudio", URL: "http://localhost:1234"},

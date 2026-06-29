@@ -313,6 +313,15 @@ func setupPipeline(client llm.LLMClient, outputDir string) (*pipeline.Pipeline, 
 	if cfg.Pipeline.HolisticAnalysis != nil {
 		pcfg.HolisticAnalysis = *cfg.Pipeline.HolisticAnalysis
 	}
+	if cfg.Pipeline.MaxTokens > 0 {
+		pcfg.MaxTokens = cfg.Pipeline.MaxTokens
+	}
+	if cfg.Pipeline.FrequencyPenalty > 0 {
+		pcfg.FrequencyPenalty = cfg.Pipeline.FrequencyPenalty
+	}
+	if cfg.Pipeline.PresencePenalty > 0 {
+		pcfg.PresencePenalty = cfg.Pipeline.PresencePenalty
+	}
 
 	pipe := pipeline.New(pcfg, client)
 

@@ -58,6 +58,9 @@ type PipelineConfig struct {
 	MaxConcurrency     int           `json:"max_concurrency"`
 	MaxFileConcurrency int           `json:"max_file_concurrency"`
 	LLMTimeout         time.Duration `json:"llm_timeout"`
+	MaxTokens          int           `json:"max_tokens"`
+	FrequencyPenalty   float64       `json:"frequency_penalty"`
+	PresencePenalty    float64       `json:"presence_penalty"`
 	HolisticAnalysis   bool          `json:"holistic_analysis"`
 }
 
@@ -67,6 +70,9 @@ func DefaultConfig() PipelineConfig {
 		ChunkOverlap:     200,
 		MaxConcurrency:   3,
 		LLMTimeout:       120 * time.Second,
+		MaxTokens:        8192,
+		FrequencyPenalty: 0.3,
+		PresencePenalty:  0.3,
 		HolisticAnalysis: true,
 	}
 }

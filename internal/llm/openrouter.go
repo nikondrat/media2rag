@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -52,9 +53,13 @@ type openRouterImageURL struct {
 }
 
 type openRouterRequest struct {
-	Model    string              `json:"model"`
-	Messages []openRouterMessage `json:"messages"`
-	Stream   bool                `json:"stream"`
+	Model            string              `json:"model"`
+	Messages         []openRouterMessage `json:"messages"`
+	Stream           bool                `json:"stream"`
+	MaxTokens        *int                `json:"max_tokens,omitempty"`
+	Stop             []string            `json:"stop,omitempty"`
+	FrequencyPenalty *float64            `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64            `json:"presence_penalty,omitempty"`
 }
 
 type openRouterChoice struct {
@@ -187,9 +192,13 @@ func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*mo
 	}
 
 	body := openRouterRequest{
-		Model:    c.model,
-		Messages: messages,
-		Stream:   false,
+		Model:            c.model,
+		Messages:         messages,
+		Stream:           false,
+		MaxTokens:        req.MaxTokens,
+		Stop:             req.Stop,
+		FrequencyPenalty: req.FrequencyPenalty,
+		PresencePenalty:  req.PresencePenalty,
 	}
 
 	openAIResp, err := c.doWithRetry(ctx, body)
@@ -203,6 +212,10 @@ func (c *OpenRouterClient) Chat(ctx context.Context, req model.ChatRequest) (*mo
 	}
 	if content == "" {
 		content = openAIResp.Choices[0].Message.ReasoningContent
+	}
+
+	if openAIResp.Choices[0].FinishReason == "length" {
+		log.Printf("WARNING: Response truncated (max_tokens reached)")
 	}
 
 	var usage *model.Usage
@@ -232,9 +245,13 @@ func (c *OpenRouterClient) StreamChat(ctx context.Context, req model.ChatRequest
 	}
 
 	body := openRouterRequest{
-		Model:    c.model,
-		Messages: messages,
-		Stream:   true,
+		Model:            c.model,
+		Messages:         messages,
+		Stream:           true,
+		MaxTokens:        req.MaxTokens,
+		Stop:             req.Stop,
+		FrequencyPenalty: req.FrequencyPenalty,
+		PresencePenalty:  req.PresencePenalty,
 	}
 
 	var buf bytes.Buffer
