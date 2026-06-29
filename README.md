@@ -1,12 +1,16 @@
 # media2rag
 
-**Любой контент → единый Markdown → RAG-ready база знаний. Одна команда.**
+> Content → RAG-ready Markdown. Preprocessor for LLM pipelines.
+> YouTube, Telegram, PDF, EPUB, audio, video — one binary, one command.
+
+**Из любого контента — RAG-ready база знаний. YouTube, Telegram, PDF, видео, аудио →**
+**чистый Markdown для LLM. Go-бинарник, одна команда.**
 
 Я — Никита, 20, самоучка с 12. Собрал 400+ источников в базу знаний.
-Набил шишки на локальных LLM. Понял, где их границы и когда нужны облачные.
+Проверил локальные LLM (LM Studio) и облачные (DeepSeek). Понял, где границы.
 
-Проект закрыл свою задачу: экстрактор и препроцессор. Для RAG-оркестрации
-использую **Dify** — не изобретаю велосипед.
+Проект закрыл свою задачу: экстрактор и препроцессор для RAG-пайплайна.
+Оркестрацию отдал **Dify** — не изобретаю велосипед.
 
 <p>
   <img src="https://img.shields.io/badge/processed-407%20sources-8A2BE2" alt="407 sources">
