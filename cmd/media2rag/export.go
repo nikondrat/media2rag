@@ -96,7 +96,7 @@ func writeChunks(dir string, doc *model.RAGDocument) error {
 		}
 
 		var cb strings.Builder
-		fmt.Fprintf(&cb, "## chunk_%02d\n", ch.Index+1)
+		fmt.Fprintf(&cb, "## chunk_%02d\n\n", ch.Index+1)
 		writeChunkField(&cb, "type", ch.Type)
 		writeChunkField(&cb, "topic", ch.Topic)
 		writeChunkField(&cb, "summary", ch.Summary)

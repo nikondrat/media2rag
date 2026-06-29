@@ -167,7 +167,7 @@ func assembleOutput(input *AssemblyInput) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "## chunk_%02d\n", ch.Index+1)
+		fmt.Fprintf(&b, "## chunk_%02d\n\n", ch.Index+1)
 		if ch.Context != "" {
 			writeField(&b, "context", ch.Context)
 		}
