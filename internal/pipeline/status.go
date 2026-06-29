@@ -24,6 +24,28 @@ const (
 	StageFailed      Stage = "failed"
 )
 
+var stageOrder = map[Stage]int{
+	StageExtracted:    0,
+	StageCleaned:      1,
+	StageSplit:        2,
+	StageProcessing:   3,
+	StageHolistic:     4,
+	StageCausal:       5,
+	StageContextEnrich: 6,
+	StageDone:         7,
+}
+
+func (s Stage) Index() int {
+	if idx, ok := stageOrder[s]; ok {
+		return idx
+	}
+	return -1
+}
+
+func stagePast(current Stage, target Stage) bool {
+	return current.Index() > target.Index() && current != StageFailed
+}
+
 type ChunkStatus struct {
 	Index       int       `yaml:"index"`
 	Done        bool      `yaml:"done"`

@@ -17,12 +17,21 @@ func (p *Pipeline) contextualEnrich(ctx context.Context, results []ChunkResult, 
 	}
 
 	var mu sync.Mutex
+	enriched := 0
+	skipped := 0
 
 	pool := &WorkerPool[int]{
 		NumWorkers: p.config.MaxConcurrency,
 		ProcessFn: func(ctx context.Context, index int) error {
 			r := &results[index]
 			if r.Content == "" || r.Summary == "" {
+				return nil
+			}
+
+			if r.Context != "" {
+				mu.Lock()
+				skipped++
+				mu.Unlock()
 				return nil
 			}
 
@@ -34,6 +43,7 @@ func (p *Pipeline) contextualEnrich(ctx context.Context, results []ChunkResult, 
 			mu.Lock()
 			r.Context = chunkContext
 			p.writeResultJSON(*r)
+			enriched++
 			mu.Unlock()
 
 			emitter.Emit(model.Event{Type: EventContextEnrichDone, Data: map[string]int{"chunk": index + 1}})
@@ -44,6 +54,10 @@ func (p *Pipeline) contextualEnrich(ctx context.Context, results []ChunkResult, 
 	indices := make([]int, len(results))
 	for i := range indices {
 		indices[i] = i
+	}
+
+	if skipped > 0 {
+		emitter.Emit(model.Event{Type: EventCheckpointRestore, Data: map[string]string{"stage": "context_enrichment", "skipped": fmt.Sprintf("%d", skipped)}})
 	}
 
 	return pool.Run(ctx, indices)
