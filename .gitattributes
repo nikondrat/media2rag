@@ -1,0 +1,4 @@
+*.go linguist-language=Go
+*.js linguist-vendored
+*.ts linguist-vendored
+*.json linguist-vendored

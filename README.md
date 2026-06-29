@@ -157,16 +157,11 @@ go build -o media2rag ./cmd/media2rag
 
 ## Об авторе
 
-Никита, 20. Самоучка с 12. Flutter (4 г.), Swift, Go, Rust.
-Строю RAG-пайплайны, копаюсь в LLM, проектирую архитектуру.
-
-Сейчас: соло iOS-разработчик events_cloud (90K строк, VIPER).
-Прошлое: Rust-парсер MOEX (2 млн записей/день), cctx-mcp.
+Архитектор решений. 4 года Flutter, Go, Swift, Rust, AI/ML.
+Строю RAG-пайплайны и AI-агентов. Проектирую архитектуру, а не пишу строки.
 
 - Telegram: [@nikondrat](https://t.me/nikondrat)
-- GitHub: [github.com/nikondrat](https://github.com/nikondrat)
-
-Открыт к предложениям: доработка, консультации, интеграции.
+- Созвон на 15 мин — без обязательств
 
 ---
 
