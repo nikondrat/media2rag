@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -92,21 +95,24 @@ func (v *VisionProcessor) Process(ctx context.Context, images []model.ExtractedI
 }
 
 func (v *VisionProcessor) describeImage(ctx context.Context, img model.ExtractedImage) (string, error) {
-	data, err := os.ReadFile(img.Path)
+	imgPath := img.Path
+
+	if isPPMFormat(imgPath) {
+		converted, cleanup, err := convertToJPEG(imgPath)
+		if err != nil {
+			return "", fmt.Errorf("convert PPM: %w", err)
+		}
+		defer cleanup()
+		imgPath = converted
+	}
+
+	data, err := os.ReadFile(imgPath)
 	if err != nil {
 		return "", fmt.Errorf("read image: %w", err)
 	}
 
-	ext := strings.ToLower(img.Path)
-	var mimeType string
-	switch {
-	case strings.HasSuffix(ext, ".jpg") || strings.HasSuffix(ext, ".jpeg"):
-		mimeType = "image/jpeg"
-	case strings.HasSuffix(ext, ".png"):
-		mimeType = "image/png"
-	case strings.HasSuffix(ext, ".gif"):
-		mimeType = "image/gif"
-	default:
+	mimeType := http.DetectContentType(data)
+	if mimeType == "application/octet-stream" {
 		mimeType = "image/jpeg"
 	}
 
@@ -144,3 +150,25 @@ const (
 	EventVisionImage = "vision_image"
 	EventVisionDone  = "vision_done"
 )
+
+func isPPMFormat(path string) bool {
+	ext := strings.ToLower(path)
+	return strings.HasSuffix(ext, ".ppm") || strings.HasSuffix(ext, ".pbm") || strings.HasSuffix(ext, ".pgm")
+}
+
+func convertToJPEG(srcPath string) (string, func(), error) {
+	if _, err := exec.LookPath("convert"); err != nil {
+		return "", nil, fmt.Errorf("ImageMagick not found: %w", err)
+	}
+
+	ext := filepath.Ext(srcPath)
+	dstPath := strings.TrimSuffix(srcPath, ext) + ".jpg"
+
+	cmd := exec.Command("convert", srcPath, "-quality", "90", dstPath)
+	if err := cmd.Run(); err != nil {
+		return "", nil, fmt.Errorf("convert failed: %w", err)
+	}
+
+	cleanup := func() { os.Remove(dstPath) }
+	return dstPath, cleanup, nil
+}
